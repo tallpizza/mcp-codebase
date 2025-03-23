@@ -3,6 +3,7 @@ import * as fs from "fs/promises";
 import { SymbolInformation } from "vscode-languageserver-protocol";
 import { LspClient } from "./lspClient";
 import { v4 as uuidv4 } from "uuid";
+import { EmbeddingService } from "./embeddingService";
 
 // 코드 청크 인터페이스
 export interface CodeChunk {
@@ -16,6 +17,7 @@ export interface CodeChunk {
   lineEnd: number;
   dependencies: string[];
   dependents: string[];
+  embedding?: number[] | null;
 }
 
 // 코드 청킹 서비스
@@ -23,11 +25,13 @@ export class CodeChunkingService {
   private lspClient: LspClient;
   private projectRoot: string;
   private projectId: string;
+  private embeddingService: EmbeddingService;
 
-  constructor(projectRoot: string, projectId: string) {
+  constructor(projectRoot: string, projectId: string, apiKey?: string) {
     this.projectRoot = projectRoot;
     this.projectId = projectId;
     this.lspClient = new LspClient(projectRoot);
+    this.embeddingService = new EmbeddingService(apiKey);
   }
 
   // 서비스 초기화
@@ -274,7 +278,7 @@ export class CodeChunkingService {
     return this.chunkDirectory(this.projectRoot);
   }
 
-  // 디렉토리 내의 모든 파일 코드 청킹
+  // 디렉토리 내의 모든 파일 코드 청킹 (병렬 처리)
   async chunkDirectory(directoryPath: string): Promise<CodeChunk[]> {
     const absolutePath = path.isAbsolute(directoryPath)
       ? directoryPath
@@ -284,36 +288,84 @@ export class CodeChunkingService {
 
     // 해당 디렉토리 내의 모든 TS/JS 파일 찾기
     const tsFiles = await this.findTsFilesInDirectory(absolutePath);
-    let allChunks: CodeChunk[] = [];
+    console.log(`디렉토리 청킹: 총 ${tsFiles.length} 파일 처리 예정`);
+
+    if (tsFiles.length === 0) {
+      console.log("처리할 파일이 없습니다.");
+      return [];
+    }
+
+    // 처리 결과 추적용 변수
     let processedFiles = 0;
     let failedFiles = 0;
 
-    console.log(`디렉토리 청킹: 총 ${tsFiles.length} 파일 처리 예정`);
-
-    for (const file of tsFiles) {
+    // 파일별 처리를 Promise 배열로 변환하여 병렬 처리
+    const chunkPromises = tsFiles.map(async (file) => {
       try {
         console.log(`처리 중: ${file}`);
         const fileChunks = await this.extractCodeChunksFromFile(file);
-        allChunks = allChunks.concat(fileChunks);
-        processedFiles++;
 
+        processedFiles++;
         if (fileChunks.length > 0) {
           console.log(`성공: ${file} - ${fileChunks.length}개 청크 추출`);
         } else {
           console.log(`주의: ${file} - 추출된 청크 없음`);
         }
+
+        return fileChunks;
       } catch (error) {
         console.error(`오류: ${file} 청킹 실패:`, error);
         failedFiles++;
-        // 개별 파일 오류가 전체 프로세스를 중단시키지 않도록 계속 진행
-        continue;
+        // 개별 파일 오류가 전체 프로세스를 중단시키지 않도록 빈 배열 반환
+        return [] as CodeChunk[];
       }
-    }
+    });
+
+    // 모든 파일 처리 결과를 병렬로 기다림
+    const chunksArrays = await Promise.all(chunkPromises);
+
+    // 모든 청크 결과 병합
+    let allChunks: CodeChunk[] = chunksArrays.flat();
 
     console.log(
       `디렉토리 청킹 완료: 총 ${tsFiles.length}개 파일 중 ${processedFiles}개 성공, ${failedFiles}개 실패, ${allChunks.length}개 코드 청크 추출`
     );
+
+    // 코드 청크에 대한 임베딩 배치 생성
+    if (allChunks.length > 0) {
+      await this.generateEmbeddingsForChunks(allChunks);
+    }
+
     return allChunks;
+  }
+
+  // 코드 청크에 대한 임베딩 생성 (배치 처리)
+  private async generateEmbeddingsForChunks(
+    chunks: CodeChunk[]
+  ): Promise<void> {
+    try {
+      console.log(`${chunks.length}개 코드 청크에 대한 임베딩 생성 시작`);
+
+      // 전처리된 코드 준비
+      const preprocessedCodes = chunks.map((chunk) =>
+        this.embeddingService.preprocessCodeForEmbedding(chunk.code)
+      );
+
+      // 배치로 임베딩 생성 (내부적으로 병렬 처리됨)
+      const embeddings = await this.embeddingService.generateBatchEmbeddings(
+        preprocessedCodes
+      );
+
+      // 각 청크에 임베딩 할당
+      for (let i = 0; i < chunks.length; i++) {
+        chunks[i].embedding = embeddings[i];
+      }
+
+      console.log(`${chunks.length}개 코드 청크의 임베딩 생성 완료`);
+    } catch (error) {
+      console.error("코드 청크 임베딩 생성 중 오류:", error);
+      throw error;
+    }
   }
 
   // 특정 디렉토리에서 모든 TypeScript/JavaScript 파일 찾기
@@ -364,6 +416,13 @@ export class CodeChunkingService {
       ? filePath
       : path.join(this.projectRoot, filePath);
 
-    return await this.extractCodeChunksFromFile(absolutePath);
+    const chunks = await this.extractCodeChunksFromFile(absolutePath);
+
+    // 코드 청크에 대한 임베딩 배치 생성
+    if (chunks.length > 0) {
+      await this.generateEmbeddingsForChunks(chunks);
+    }
+
+    return chunks;
   }
 }

@@ -67,9 +67,20 @@ export class CodeChunkRepository {
     try {
       console.log(`${chunks.length}개의 코드 청크 저장 시작`);
 
+      // 중복 청크 제거 (projectId + path + name 조합이 동일한 경우)
+      const uniqueChunks = this.deduplicateChunks(chunks);
+
+      if (chunks.length !== uniqueChunks.length) {
+        console.log(
+          `중복 제거: ${chunks.length}개 -> ${uniqueChunks.length}개 (${
+            chunks.length - uniqueChunks.length
+          }개 중복 제거됨)`
+        );
+      }
+
       // 코드 청크 벌크 저장을 위한 값 변환
-      const chunkValues = chunks.map((chunk) => ({
-        id: chunk.id,
+      const chunkValues = uniqueChunks.map((chunk) => ({
+        id: uuidv4(),
         projectId: chunk.projectId,
         path: chunk.path,
         code: chunk.code,
@@ -79,7 +90,7 @@ export class CodeChunkRepository {
         lineEnd: chunk.lineEnd,
         dependencies: chunk.dependencies || [],
         dependents: chunk.dependents || [],
-        embedding: [] as number[], // 임시 빈 배열, 나중에 임베딩 처리
+        embedding: chunk.embedding || null, // 임베딩이 없으면 null 사용
       }));
 
       // 청크를 데이터베이스에 삽입
@@ -92,6 +103,9 @@ export class CodeChunkRepository {
             code: sql`excluded.code`,
             lineStart: sql`excluded.line_start`,
             lineEnd: sql`excluded.line_end`,
+            embedding: sql`excluded.embedding`,
+            dependencies: sql`excluded.dependencies`,
+            dependents: sql`excluded.dependents`,
             updatedAt: sql`current_timestamp`,
           },
         })
@@ -102,6 +116,23 @@ export class CodeChunkRepository {
       console.error("코드 청크 저장 중 오류 발생:", error);
       throw error;
     }
+  }
+
+  // 중복 청크 제거 함수
+  private deduplicateChunks(chunks: CodeChunkDto[]): CodeChunkDto[] {
+    const uniqueMap = new Map<string, CodeChunkDto>();
+
+    for (const chunk of chunks) {
+      // 고유 키 생성 (projectId + path + name)
+      const uniqueKey = `${chunk.projectId}-${chunk.path}-${chunk.name}`;
+
+      // 중복이 발견되지 않았거나, 기존 청크보다 더 최신 정보를 가진 경우 맵에 추가
+      if (!uniqueMap.has(uniqueKey)) {
+        uniqueMap.set(uniqueKey, chunk);
+      }
+    }
+
+    return Array.from(uniqueMap.values());
   }
 
   // 프로젝트 ID로 코드 청크 조회
