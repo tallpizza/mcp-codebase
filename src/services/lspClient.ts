@@ -17,6 +17,8 @@ export class LspClient {
   private serverProcess: ChildProcess | null = null;
   private connection: rpc.MessageConnection | null = null;
   private projectRoot: string;
+  private isConnectionActive: boolean = false;
+  private isShuttingDown: boolean = false;
 
   constructor(projectRoot: string) {
     this.projectRoot = path.resolve(projectRoot); // 절대 경로로 변환
@@ -26,6 +28,18 @@ export class LspClient {
    * LSP 서버를 시작하고 초기화
    */
   async start(): Promise<void> {
+    if (this.isConnectionActive) {
+      console.log("LSP 클라이언트가 이미 활성화되어 있습니다.");
+      return;
+    }
+
+    if (this.isShuttingDown) {
+      console.log(
+        "LSP 클라이언트가 종료 중입니다. 새 요청을 처리할 수 없습니다."
+      );
+      return;
+    }
+
     try {
       // typescript-language-server 실행 (stdio를 통해 통신)
       this.serverProcess = spawn("typescript-language-server", ["--stdio"], {
@@ -36,13 +50,36 @@ export class LspClient {
         throw new Error("LSP 서버의 스트림을 초기화할 수 없습니다.");
       }
 
+      // 서버 프로세스 오류 및 종료 이벤트 처리
+      this.serverProcess.on("error", (err) => {
+        console.error("LSP 서버 프로세스 오류:", err);
+        this.isConnectionActive = false;
+      });
+
+      this.serverProcess.on("exit", (code, signal) => {
+        console.log(`LSP 서버 종료됨 (코드: ${code}, 신호: ${signal})`);
+        this.isConnectionActive = false;
+      });
+
       // JSON-RPC 연결 설정
       this.connection = rpc.createMessageConnection(
         new rpc.StreamMessageReader(this.serverProcess.stdout),
         new rpc.StreamMessageWriter(this.serverProcess.stdin)
       );
 
+      // 연결 오류 핸들러 설정
+      this.connection.onError((err) => {
+        console.error("LSP 연결 오류:", err);
+        this.isConnectionActive = false;
+      });
+
+      this.connection.onClose(() => {
+        console.log("LSP 연결 닫힘");
+        this.isConnectionActive = false;
+      });
+
       this.connection.listen();
+      this.isConnectionActive = true;
 
       // LSP 초기화 요청
       const initializeParams: InitializeParams = {
@@ -67,12 +104,14 @@ export class LspClient {
         "initialize",
         initializeParams
       );
-      console.log("LSP 서버 초기화 완료:", initResult);
+      console.log("LSP 서버 초기화 완료");
 
       // 초기화 완료 알림
       this.connection.sendNotification("initialized", {});
     } catch (error) {
+      this.isConnectionActive = false;
       console.error("LSP 서버 시작 실패:", error);
+      await this.cleanupResources();
       throw new Error(`LSP 서버 시작 실패: ${error}`);
     }
   }
@@ -83,8 +122,13 @@ export class LspClient {
    * @returns SymbolInformation 배열
    */
   async getSymbols(filePath: string): Promise<SymbolInformation[]> {
-    if (!this.connection) {
-      throw new Error("LSP 클라이언트가 초기화되지 않았습니다.");
+    if (!this.connection || !this.isConnectionActive) {
+      console.log("LSP 연결이.활성화되지 않음, 재연결 시도...");
+      await this.start();
+
+      if (!this.connection || !this.isConnectionActive) {
+        throw new Error("LSP 클라이언트 재연결 실패");
+      }
     }
 
     try {
@@ -102,6 +146,7 @@ export class LspClient {
           text: content,
         },
       };
+
       await this.connection.sendNotification(
         "textDocument/didOpen",
         didOpenParams
@@ -111,15 +156,44 @@ export class LspClient {
       const symbolParams: DocumentSymbolParams = {
         textDocument: { uri },
       };
+
       const symbols = await this.connection.sendRequest(
         "textDocument/documentSymbol",
         symbolParams
       );
 
       return (symbols as SymbolInformation[]) || [];
-    } catch (error) {
+    } catch (error: any) {
       console.error(`심볼 추출 실패 (${filePath}):`, error);
+      // 오류 발생 시 연결 상태 업데이트
+      if (
+        error.message &&
+        (error.message.includes("destroyed") ||
+          error.message.includes("close") ||
+          error.message.includes("terminated"))
+      ) {
+        this.isConnectionActive = false;
+      }
       return [];
+    }
+  }
+
+  /**
+   * 리소스 정리
+   */
+  private async cleanupResources(): Promise<void> {
+    try {
+      if (this.connection) {
+        this.connection.dispose();
+        this.connection = null;
+      }
+
+      if (this.serverProcess) {
+        this.serverProcess.kill();
+        this.serverProcess = null;
+      }
+    } catch (err) {
+      console.error("리소스 정리 중 오류:", err);
     }
   }
 
@@ -132,18 +206,22 @@ export class LspClient {
       return;
     }
 
+    this.isShuttingDown = true;
+
     try {
-      await this.connection.sendRequest("shutdown");
-      this.connection.sendNotification("exit");
-      this.serverProcess.kill();
-      this.connection.dispose();
+      if (this.isConnectionActive) {
+        await this.connection.sendRequest("shutdown");
+        this.connection.sendNotification("exit");
+      }
+
+      await this.cleanupResources();
       console.log("LSP 서버 종료 완료");
     } catch (error) {
       console.error("LSP 서버 종료 실패:", error);
-      this.serverProcess.kill("SIGKILL"); // 강제 종료
+      await this.cleanupResources();
     } finally {
-      this.connection = null;
-      this.serverProcess = null;
+      this.isConnectionActive = false;
+      this.isShuttingDown = false;
     }
   }
 

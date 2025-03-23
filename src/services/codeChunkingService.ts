@@ -67,115 +67,194 @@ export class CodeChunkingService {
   }
 
   // 파일에서 코드 청크 추출
-  async extractCodeChunksFromFile(filePath: string): Promise<CodeChunk[]> {
+  private async extractCodeChunksFromFile(
+    filePath: string
+  ): Promise<CodeChunk[]> {
     try {
-      console.log(`파일 코드 청크 추출 시작: ${filePath}`);
+      // 파일 내용 읽기
+      const content = await fs.readFile(filePath, "utf-8");
 
-      try {
-        // 파일이 존재하고 읽을 수 있는지 확인
-        await fs.access(filePath, fs.constants.R_OK);
-      } catch (error) {
-        console.error(`파일 접근 오류: ${filePath}`, error);
-        return [];
-      }
-
-      const fileContent = await this.readFileContent(filePath);
-
-      if (!fileContent || fileContent.trim().length === 0) {
-        console.log(`파일이 비어있음: ${filePath}`);
-        return [];
-      }
-
-      console.log(`LSP를 통해 심볼 요청: ${filePath}`);
-
-      // 파일 기본 분석 수행 - 실제 코드가 있는지 검증
-      const hasCode = this.analyzeFileForCode(fileContent, filePath);
-      if (!hasCode) {
-        console.log(`유의미한 코드가 없음: ${filePath}`);
-        return [];
-      }
-
-      // 심볼 정보 요청
+      // 심볼 정보 가져오기
       const symbols = await this.lspClient.getSymbols(filePath);
-      console.log(`발견된 심볼 수: ${symbols.length}`);
 
-      const relativeFilePath = path.relative(this.projectRoot, filePath);
+      if (!symbols || symbols.length === 0) {
+        return [];
+      }
 
-      if (symbols.length === 0) {
-        console.log(`심볼이 없음: ${filePath}`);
+      console.log(
+        `파일 심볼 추출: ${filePath} - ${symbols.length}개 심볼 발견`
+      );
 
-        // 파일에 확실히 코드가 있는데도 심볼이 발견되지 않은 경우 추가 진단
-        if (this.hasDefiniteCode(fileContent)) {
-          console.warn(
-            `경고: 파일에 코드가 있지만 심볼이 추출되지 않음: ${filePath}`
-          );
+      const chunks: CodeChunk[] = [];
 
-          // 파일 내용의 처음 몇 줄 출력하여 디버깅에 도움
-          const previewLines = fileContent.split("\n").slice(0, 10).join("\n");
-          console.log(`파일 미리보기:\n${previewLines}`);
+      // 파일 내용을 라인 단위로 분리
+      const lines = content.split("\n");
+
+      // 함수, 클래스, 타입과 같은 관련 심볼만 필터링
+      const relevantSymbols = symbols.filter((symbol) => {
+        // 심볼 종류 (SymbolKind enum 기준)
+        const kind = symbol.kind;
+
+        // 함수(12), 메서드(6), 클래스(5), 인터페이스(11), 타입 별칭(26)만 선택
+        return (
+          kind === 5 || kind === 6 || kind === 11 || kind === 12 || kind === 26
+        );
+      });
+
+      console.log(
+        `관련 심볼 필터링: ${symbols.length}개 -> ${relevantSymbols.length}개`
+      );
+
+      // 각 심볼에서 코드 청크 생성
+      for (const symbol of relevantSymbols) {
+        // 심볼 위치 정보
+        const startLine = symbol.location.range.start.line;
+        const endLine = symbol.location.range.end.line;
+
+        // 해당 범위의 코드 추출
+        const codeLines = lines.slice(startLine, endLine + 1);
+        const code = codeLines.join("\n");
+
+        // 청크 타입 결정
+        let type: "function" | "class" | "type";
+        switch (symbol.kind) {
+          case 5: // 클래스
+            type = "class";
+            break;
+          case 6: // 메서드
+          case 12: // 함수
+            type = "function";
+            break;
+          case 11: // 인터페이스
+          case 26: // 타입 별칭
+            type = "type";
+            break;
+          default:
+            continue; // 지원되지 않는 심볼 종류는 건너뜀
         }
 
-        return [];
+        // 의존성 분석
+        const dependencies = this.analyzeDependencies(code);
+
+        // 코드 청크 생성
+        const chunk: CodeChunk = {
+          id: uuidv4(),
+          projectId: this.projectId,
+          path: filePath,
+          code,
+          type,
+          name: symbol.name,
+          lineStart: startLine,
+          lineEnd: endLine,
+          dependencies,
+          dependents: [], // 의존성 그래프 구축 시 업데이트됨
+          embedding: null,
+        };
+
+        chunks.push(chunk);
       }
 
-      return symbols
-        .map((symbol) => {
-          try {
-            const symbolCode = this.extractCodeForSymbol(fileContent, symbol);
+      console.log(`코드 청크 생성 완료: ${filePath} - ${chunks.length}개 청크`);
 
-            // 타입 결정 (기본값은 function)
-            let chunkType: "function" | "class" | "type" = "function";
+      // 생성된 청크에 대한 의존 관계 분석
+      this.analyzeDependencyGraph(chunks);
 
-            if (symbol.kind === 5) {
-              // Class
-              chunkType = "class";
-            } else if (
-              symbol.kind === 11 ||
-              symbol.kind === 10 ||
-              symbol.kind === 26
-            ) {
-              // 11: Interface, 10: Enum, 26: TypeParameter
-              chunkType = "type";
-            }
-
-            // 심볼 이름 검증 - 빈 심볼 이름이나 특수문자만 있는 경우 무시
-            if (
-              !symbol.name ||
-              symbol.name.trim().length === 0 ||
-              /^[^a-zA-Z0-9_$]+$/.test(symbol.name)
-            ) {
-              console.log(`유효하지 않은 심볼 이름 무시: '${symbol.name}'`);
-              return null;
-            }
-
-            // 심볼 코드가 너무 짧은 경우 무시
-            if (symbolCode.trim().length < 5) {
-              console.log(`너무 짧은 심볼 코드 무시: '${symbol.name}'`);
-              return null;
-            }
-
-            return {
-              id: uuidv4(),
-              projectId: this.projectId,
-              path: relativeFilePath,
-              code: symbolCode,
-              type: chunkType,
-              name: symbol.name,
-              lineStart: symbol.location.range.start.line,
-              lineEnd: symbol.location.range.end.line,
-              dependencies: [], // 나중에 분석
-              dependents: [], // 나중에 분석
-            };
-          } catch (symbolError) {
-            console.error(`심볼 처리 오류 (${symbol.name}):`, symbolError);
-            // 심볼 오류가 발생해도 다른 심볼은 계속 처리하도록 null 반환
-            return null;
-          }
-        })
-        .filter((chunk) => chunk !== null) as CodeChunk[]; // null 값 필터링
+      return chunks;
     } catch (error) {
-      console.error(`파일 청킹 전체 오류 (${filePath}):`, error);
-      return [];
+      console.error(`파일 코드 청크 추출 오류 (${filePath}):`, error);
+      throw error;
+    }
+  }
+
+  // 코드에서 의존성 분석
+  private analyzeDependencies(code: string): string[] {
+    const dependencies: string[] = [];
+
+    try {
+      // 1. import 문 분석
+      const importRegex =
+        /import\s+(?:(?:{([^}]+)})|(?:(\w+)))\s+from\s+['"][^'"]+['"]/g;
+      let match;
+
+      while ((match = importRegex.exec(code)) !== null) {
+        if (match[1]) {
+          // 중괄호 내 가져오기 항목 (예: import { useState, useEffect } from 'react')
+          const imports = match[1]
+            .split(",")
+            .map((i) => i.trim().split(" as ")[0].trim());
+          dependencies.push(...imports);
+        } else if (match[2]) {
+          // 기본 가져오기 (예: import React from 'react')
+          dependencies.push(match[2]);
+        }
+      }
+
+      // 2. 클래스 확장 분석
+      const extendsRegex = /class\s+\w+\s+extends\s+(\w+)/g;
+      while ((match = extendsRegex.exec(code)) !== null) {
+        if (match[1]) {
+          dependencies.push(match[1]);
+        }
+      }
+
+      // 3. 인터페이스 확장 분석
+      const interfaceRegex = /interface\s+\w+\s+extends\s+([^{]+)/g;
+      while ((match = interfaceRegex.exec(code)) !== null) {
+        if (match[1]) {
+          const interfaces = match[1].split(",").map((i) => i.trim());
+          dependencies.push(...interfaces);
+        }
+      }
+
+      // 4. 타입 참조 분석
+      const typeRegex = /:\s*(\w+)(?:<[^>]*>)?/g;
+      while ((match = typeRegex.exec(code)) !== null) {
+        if (
+          match[1] &&
+          ![
+            "string",
+            "number",
+            "boolean",
+            "any",
+            "void",
+            "null",
+            "undefined",
+          ].includes(match[1])
+        ) {
+          dependencies.push(match[1]);
+        }
+      }
+
+      // 5. 중복 제거 및 정리
+      return Array.from(new Set(dependencies));
+    } catch (err) {
+      console.error("의존성 분석 중 오류:", err);
+      return dependencies;
+    }
+  }
+
+  // 청크 간 의존성 그래프 구축
+  private analyzeDependencyGraph(chunks: CodeChunk[]): void {
+    try {
+      // 이름으로 청크를 찾을 수 있도록 맵 구성
+      const chunkMap = new Map<string, CodeChunk>();
+      chunks.forEach((chunk) => {
+        chunkMap.set(chunk.name, chunk);
+      });
+
+      // 각 청크의 의존성을 확인하고 의존성 청크의 dependents 배열에 현재 청크 추가
+      chunks.forEach((chunk) => {
+        chunk.dependencies.forEach((depName) => {
+          const depChunk = chunkMap.get(depName);
+          if (depChunk && !depChunk.dependents.includes(chunk.name)) {
+            depChunk.dependents.push(chunk.name);
+          }
+        });
+      });
+
+      console.log(`의존성 그래프 구축 완료: ${chunks.length}개 청크`);
+    } catch (error) {
+      console.error("의존성 그래프 구축 중 오류:", error);
     }
   }
 
