@@ -11,7 +11,7 @@ export interface CodeChunk {
   projectId: string;
   path: string;
   code: string;
-  type: "function" | "class" | "type";
+  type: "function" | "class" | "type" | "constant";
   name: string;
   lineStart: number;
   lineEnd: number;
@@ -44,128 +44,81 @@ export class CodeChunkingService {
     await this.lspClient.stop();
   }
 
-  // 파일 내용 읽기
-  private async readFileContent(filePath: string): Promise<string> {
-    try {
-      return await fs.readFile(filePath, "utf-8");
-    } catch (error) {
-      console.error(`파일 읽기 오류 (${filePath}):`, error);
-      throw error;
-    }
+  private isFunctionVariable(code: string): boolean {
+    const firstLine = code.split("\n")[0].trim();
+    // 화살표 함수 또는 함수 표현식 패턴
+    const arrowFunctionRegex =
+      /^\s*(const|let|var)\s+\w+\s*=\s*(async\s*)?\(.*\)\s*=>/;
+    const functionExpressionRegex =
+      /^\s*(const|let|var)\s+\w+\s*=\s*(async\s*)?function\s*\(/;
+    return (
+      arrowFunctionRegex.test(firstLine) ||
+      functionExpressionRegex.test(firstLine)
+    );
   }
 
-  // 코드 청크의 코드 내용 추출
-  private extractCodeForSymbol(
-    fileContent: string,
-    symbolInfo: SymbolInformation
-  ): string {
-    const lines = fileContent.split("\n");
-    const startLine = symbolInfo.location.range.start.line;
-    const endLine = symbolInfo.location.range.end.line;
-
-    return lines.slice(startLine, endLine + 1).join("\n");
-  }
-
-  // 파일에서 코드 청크 추출
   private async extractCodeChunksFromFile(
     filePath: string
   ): Promise<CodeChunk[]> {
-    try {
-      // 파일 내용 읽기
-      const content = await fs.readFile(filePath, "utf-8");
+    const content = await fs.readFile(filePath, "utf-8");
+    const symbols = await this.lspClient.getSymbols(filePath);
+    const chunks: CodeChunk[] = [];
+    const lines = content.split("\n");
 
-      // 심볼 정보 가져오기
-      const symbols = await this.lspClient.getSymbols(filePath);
+    if (!symbols || symbols.length === 0) {
+      console.log(`파일에서 심볼을 찾을 수 없음: ${filePath}`);
+      return [];
+    }
 
-      if (!symbols || symbols.length === 0) {
-        return [];
+    // 클래스(5), 함수(12), 메서드(6), 인터페이스(11), 타입 별칭(26), 변수(13) 필터링
+    const relevantSymbols = symbols.filter((symbol) =>
+      [5, 12, 6, 11, 26, 13].includes(symbol.kind)
+    );
+
+    for (const symbol of relevantSymbols) {
+      const startLine = symbol.location.range.start.line;
+      const endLine = symbol.location.range.end.line;
+      const codeLines = lines.slice(startLine, endLine + 1);
+      const code = codeLines.join("\n");
+      const name = symbol.name;
+
+      let type: "function" | "class" | "type" | "constant" | null = null;
+
+      if (symbol.kind === 5) {
+        type = "class";
+      } else if (symbol.kind === 12 || symbol.kind === 6) {
+        type = "function";
+      } else if (symbol.kind === 11 || symbol.kind === 26) {
+        type = "type";
+      } else if (symbol.kind === 13) {
+        if (this.isFunctionVariable(code)) {
+          type = "function"; // 함수로 정의된 변수
+        } else {
+          type = "constant"; // 함수가 아닌 const 상수
+        }
       }
 
-      console.log(
-        `파일 심볼 추출: ${filePath} - ${symbols.length}개 심볼 발견`
-      );
-
-      const chunks: CodeChunk[] = [];
-
-      // 파일 내용을 라인 단위로 분리
-      const lines = content.split("\n");
-
-      // 함수, 클래스, 타입과 같은 관련 심볼만 필터링
-      const relevantSymbols = symbols.filter((symbol) => {
-        // 심볼 종류 (SymbolKind enum 기준)
-        const kind = symbol.kind;
-
-        // 함수(12), 메서드(6), 클래스(5), 인터페이스(11), 타입 별칭(26)만 선택
-        return (
-          kind === 5 || kind === 6 || kind === 11 || kind === 12 || kind === 26
-        );
-      });
-
-      console.log(
-        `관련 심볼 필터링: ${symbols.length}개 -> ${relevantSymbols.length}개`
-      );
-
-      // 각 심볼에서 코드 청크 생성
-      for (const symbol of relevantSymbols) {
-        // 심볼 위치 정보
-        const startLine = symbol.location.range.start.line;
-        const endLine = symbol.location.range.end.line;
-
-        // 해당 범위의 코드 추출
-        const codeLines = lines.slice(startLine, endLine + 1);
-        const code = codeLines.join("\n");
-
-        // 청크 타입 결정
-        let type: "function" | "class" | "type";
-        switch (symbol.kind) {
-          case 5: // 클래스
-            type = "class";
-            break;
-          case 6: // 메서드
-          case 12: // 함수
-            type = "function";
-            break;
-          case 11: // 인터페이스
-          case 26: // 타입 별칭
-            type = "type";
-            break;
-          default:
-            continue; // 지원되지 않는 심볼 종류는 건너뜀
-        }
-
-        // 의존성 분석
-        const dependencies = this.analyzeDependencies(code);
-
-        // 코드 청크 생성
+      if (type) {
         const chunk: CodeChunk = {
           id: uuidv4(),
           projectId: this.projectId,
           path: filePath,
           code,
           type,
-          name: symbol.name,
+          name,
           lineStart: startLine,
           lineEnd: endLine,
-          dependencies,
-          dependents: [], // 의존성 그래프 구축 시 업데이트됨
+          dependencies: this.analyzeDependencies(code),
+          dependents: [],
           embedding: null,
         };
-
         chunks.push(chunk);
       }
-
-      console.log(`코드 청크 생성 완료: ${filePath} - ${chunks.length}개 청크`);
-
-      // 생성된 청크에 대한 의존 관계 분석
-      this.analyzeDependencyGraph(chunks);
-
-      return chunks;
-    } catch (error) {
-      console.error(`파일 코드 청크 추출 오류 (${filePath}):`, error);
-      throw error;
     }
-  }
 
+    this.analyzeDependencyGraph(chunks);
+    return chunks;
+  }
   // 코드에서 의존성 분석
   private analyzeDependencies(code: string): string[] {
     const dependencies: string[] = [];
@@ -225,131 +178,75 @@ export class CodeChunkingService {
         }
       }
 
-      // 5. 중복 제거 및 정리
-      return Array.from(new Set(dependencies));
+      // 5. 중복 제거 및 JavaScript 내장 객체/함수 제외
+      const jsBuiltins = [
+        "Array",
+        "Object",
+        "String",
+        "Number",
+        "Boolean",
+        "Date",
+        "Math",
+        "RegExp",
+        "Function",
+        "Promise",
+        "Set",
+        "Map",
+        "WeakMap",
+        "WeakSet",
+        "Symbol",
+        "Error",
+        "JSON",
+        "Int8Array",
+        "Uint8Array",
+        "console",
+        "setTimeout",
+        "setInterval",
+        "clearTimeout",
+        "clearInterval",
+        "requestAnimationFrame",
+        "localStorage",
+        "sessionStorage",
+        "Event",
+        "XMLHttpRequest",
+        "fetch",
+        "document",
+        "window",
+        "Buffer",
+        "process",
+        "require",
+        "module",
+        "exports",
+        "global",
+        "__dirname",
+        "__filename",
+      ];
+
+      return Array.from(new Set(dependencies)).filter(
+        (dep) => !jsBuiltins.includes(dep)
+      );
     } catch (err) {
       console.error("의존성 분석 중 오류:", err);
       return dependencies;
     }
   }
 
-  // 청크 간 의존성 그래프 구축
   private analyzeDependencyGraph(chunks: CodeChunk[]): void {
-    try {
-      // 이름으로 청크를 찾을 수 있도록 맵 구성
-      const chunkMap = new Map<string, CodeChunk>();
-      chunks.forEach((chunk) => {
-        chunkMap.set(chunk.name, chunk);
-      });
-
-      // 각 청크의 의존성을 확인하고 의존성 청크의 dependents 배열에 현재 청크 추가
-      chunks.forEach((chunk) => {
-        chunk.dependencies.forEach((depName) => {
-          const depChunk = chunkMap.get(depName);
-          if (depChunk && !depChunk.dependents.includes(chunk.name)) {
-            depChunk.dependents.push(chunk.name);
-          }
-        });
-      });
-
-      console.log(`의존성 그래프 구축 완료: ${chunks.length}개 청크`);
-    } catch (error) {
-      console.error("의존성 그래프 구축 중 오류:", error);
-    }
-  }
-
-  // 파일 내용 분석하여 코드가 있는지 확인
-  private analyzeFileForCode(fileContent: string, filePath: string): boolean {
-    // 빈 파일 체크
-    if (!fileContent || fileContent.trim().length === 0) {
-      return false;
-    }
-
-    // 주석이나 공백만 있는지 체크
-    const nonCommentNonEmptyLines = fileContent.split("\n").filter((line) => {
-      const trimmed = line.trim();
-      return (
-        trimmed.length > 0 &&
-        !trimmed.startsWith("//") &&
-        !trimmed.startsWith("/*") &&
-        !trimmed.startsWith("*") &&
-        !trimmed.startsWith("*/")
-      );
+    const chunkMap = new Map<string, CodeChunk>();
+    // 청크를 이름으로 매핑
+    chunks.forEach((chunk) => {
+      chunkMap.set(chunk.name, chunk);
     });
 
-    if (nonCommentNonEmptyLines.length < 2) {
-      console.log(`파일이 주석이나 공백만 포함: ${filePath}`);
-      return false;
-    }
-
-    // 실제 코드 존재 여부 체크
-    const hasImports = /import\s+.+\s+from\s+/.test(fileContent);
-    const hasExports = /export\s+/.test(fileContent);
-    const hasClass = /class\s+\w+/.test(fileContent);
-    const hasFunction =
-      /function\s+\w+/.test(fileContent) ||
-      /const\s+\w+\s*=\s*(\(.*\)|async\s*\(.*\))\s*=>/.test(fileContent) ||
-      /\w+\s*\(.*\)\s*{/.test(fileContent);
-    const hasInterface = /interface\s+\w+/.test(fileContent);
-    const hasType = /type\s+\w+\s*=/.test(fileContent);
-    const hasVariable =
-      /const\s+\w+\s*=/.test(fileContent) || /let\s+\w+\s*=/.test(fileContent);
-
-    const hasCode =
-      hasImports ||
-      hasExports ||
-      hasClass ||
-      hasFunction ||
-      hasInterface ||
-      hasType ||
-      hasVariable;
-
-    if (!hasCode) {
-      console.log(`코드가 발견되지 않음: ${filePath}`);
-      return false;
-    }
-
-    return true;
-  }
-
-  // 파일에 확실히 코드가 있는지 엄격하게 확인
-  private hasDefiniteCode(fileContent: string): boolean {
-    // 키워드와 패턴을 포함하는 라인 카운트
-    const codePatterns = [
-      /class\s+\w+/,
-      /function\s+\w+/,
-      /interface\s+\w+/,
-      /type\s+\w+\s*=/,
-      /export\s+(const|let|function|class|interface|type)/,
-      /const\s+\w+\s*=\s*(\(.*\)|async\s*\(.*\))\s*=>/,
-      /\w+\s*\(.*\)\s*{/,
-    ];
-
-    const lines = fileContent.split("\n");
-    let codeLineCount = 0;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (
-        trimmed.length === 0 ||
-        trimmed.startsWith("//") ||
-        trimmed.startsWith("/*") ||
-        trimmed.startsWith("*") ||
-        trimmed.startsWith("*/")
-      ) {
-        continue;
-      }
-
-      for (const pattern of codePatterns) {
-        if (pattern.test(trimmed)) {
-          codeLineCount++;
-          break;
+    // 각 청크의 dependencies를 분석하여 dependents 업데이트
+    chunks.forEach((chunk) => {
+      chunk.dependencies.forEach((depName) => {
+        const depChunk = chunkMap.get(depName);
+        if (depChunk && !depChunk.dependents.includes(chunk.name)) {
+          depChunk.dependents.push(chunk.name); // dependents에 추가
         }
-      }
-    }
-
-    // 3개 이상의 코드 라인이 있으면 확실한 코드로 간주
-    return codeLineCount >= 3;
+      });
+    });
   }
 
   // 프로젝트 전체 코드 청킹

@@ -29,7 +29,9 @@ export const codeChunks = pgTable(
       .references(() => projects.id),
     path: text("path").notNull(),
     code: text("code").notNull(),
-    type: text("type", { enum: ["function", "class", "type"] }).notNull(),
+    type: text("type", {
+      enum: ["function", "class", "type", "constant"],
+    }).notNull(),
     name: text("name").notNull(),
     lineStart: integer("line_start").notNull(),
     lineEnd: integer("line_end").notNull(),
