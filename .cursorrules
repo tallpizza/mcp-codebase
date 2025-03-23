@@ -1,0 +1,115 @@
+# MCP 서버 프로젝트 규칙 및 지침
+
+## 코드 스타일 및 구조
+- TypeScript strict 모드 사용
+- 함수형 프로그래밍 접근 방식 선호
+- 모듈식 아키텍처 구현
+- 명확한 인터페이스 정의
+
+## 폴더 구조 규칙
+```
+src/
+  ├── index.ts           # 앱 진입점
+  ├── routes/            # API 라우팅
+  │   ├── fs.ts          # 파일 시스템 관련 라우트
+  │   ├── code.ts        # 코드 분석 관련 라우트
+  │   └── projects.ts    # 프로젝트 관리 라우트
+  ├── services/          # 비즈니스 로직
+  │   ├── fileSystem.ts  # 파일 시스템 서비스
+  │   ├── lspClient.ts   # LSP 클라이언트
+  │   ├── embedding.ts   # 임베딩 서비스
+  │   └── projects.ts    # 프로젝트 관리 서비스
+  ├── models/            # 데이터 모델 및 인터페이스
+  │   ├── codeChunk.ts   # 코드 청크 모델
+  │   ├── project.ts     # 프로젝트 모델
+  │   └── apiTypes.ts    # API 타입 정의
+  ├── db/                # 데이터베이스 관련
+  │   ├── schema.ts      # Drizzle 스키마 정의
+  │   ├── index.ts       # DB 클라이언트 설정
+  │   └── migrations/    # 마이그레이션 파일
+  └── utils/             # 유틸리티 함수
+      ├── errors.ts      # 에러 처리
+      └── security.ts    # 보안 관련
+```
+
+## 데이터베이스 규칙
+- 프로젝트 테이블명은 `projects`로 통일
+- 코드 청크 테이블명은 `code_chunks`로 통일
+- 모든 테이블은 `id`, `created_at`, `updated_at` 필드 포함
+- 임베딩 벡터는 `vector` 타입으로 저장
+- JSON 필드는 `jsonb` 타입 사용
+- 테이블 컬럼명은 스네이크 케이스 사용
+- 모델 속성명은 카멜 케이스 사용
+- 코드 청크는 항상 프로젝트에 속함 (project_id 외래 키)
+
+## 주요 개발 원칙
+1. **모듈 분리**: 각 기능은 별도의 모듈로 분리하여 개발
+2. **인터페이스 우선**: 구현 전 명확한 인터페이스 정의
+3. **에러 처리**: 모든 비동기 작업에 적절한 에러 처리 구현
+4. **보안 중시**: 파일 시스템 접근 시 경로 검증 철저히 수행
+5. **성능 고려**: 대규모 코드베이스 처리 시 성능 최적화
+6. **타입 안전성**: Drizzle의 타입 안전한 쿼리 빌더 활용
+7. **프로젝트 분리**: 코드베이스를 프로젝트 단위로 관리하여 검색 정확도 향상
+
+## 기술적 접근 방식
+- **파일 시스템 접근**: Node.js의 `fs/promises` API 사용
+- **LSP 통합**: `vscode-languageserver-protocol` 활용
+- **임베딩**: OpenAI의 text-embedding-3-small 모델 활용
+- **벡터 저장**: PostgreSQL의 pgvector 확장 사용
+- **ORM**: Drizzle ORM으로 타입 안전한 데이터 액세스
+- **코드 청킹**: 함수, 클래스, 인터페이스/타입 정의에 집중
+
+## 프로젝트 데이터 모델
+```typescript
+// src/db/schema.ts
+import { pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+
+export const projects = pgTable('projects', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  path: text('path').notNull(),
+  description: text('description'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+```
+
+## 코드 청크 데이터 모델
+```typescript
+// src/db/schema.ts
+import { pgTable, text, timestamp, uuid, jsonb, integer } from 'drizzle-orm/pg-core';
+import { vector } from './vectorExtension';
+import { projects } from './schema';
+
+export const codeChunks = pgTable('code_chunks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id),
+  path: text('path').notNull(),
+  code: text('code').notNull(),
+  type: text('type', { enum: ['function', 'class', 'type'] }).notNull(),
+  name: text('name').notNull(),
+  lineStart: integer('line_start').notNull(),
+  lineEnd: integer('line_end').notNull(),
+  dependencies: jsonb('dependencies').$type<string[]>().default([]),
+  dependents: jsonb('dependents').$type<string[]>().default([]),
+  embedding: vector('embedding', { dimensions: 1536 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+```
+
+## API 엔드포인트 규칙
+- 프로젝트 관련 모든 API는 `/projects` 아래에 구성
+- 검색 API는 항상 `projectId` 파라미터를 지원하여 프로젝트별 필터링 가능
+- 코드 청킹 API는 항상 프로젝트 ID를 요구하여 청크의 소속을 명확히 함
+
+## 배포 및 환경 설정
+- 개발 환경: Bun 개발 서버 활용 (`bun run --hot`)
+- 환경 변수: `.env` 파일 사용
+- API 키 관리: 환경 변수로 안전하게 관리
+- 데이터베이스: Docker Compose로 PostgreSQL + pgvector 설정
+
+## 프로젝트 진화 방향
+- 초기: 기본 기능 구현과 API 안정화
+- 중기: 다양한 언어 지원 및 성능 최적화
+- 장기: 고급 코드 분석 기능 및 UI 클라이언트 개발 
