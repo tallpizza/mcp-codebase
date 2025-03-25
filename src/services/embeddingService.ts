@@ -31,8 +31,6 @@ export class EmbeddingService {
 
   /**
    * 여러 텍스트에 대한 임베딩을 배치로 생성 (병렬 처리)
-   * @param texts 임베딩을 생성할 텍스트 배열
-   * @returns 각 텍스트에 대한 임베딩 배열
    */
   async generateBatchEmbeddings(texts: string[]): Promise<number[][]> {
     if (!texts || texts.length === 0) {
@@ -40,15 +38,23 @@ export class EmbeddingService {
     }
 
     try {
+      // 빈 문자열 필터링
+      const validTexts = texts.filter((text) => text && text.length > 0);
+
+      if (validTexts.length === 0) {
+        console.log("유효한 텍스트가 없습니다.");
+        return [];
+      }
+
       const batches: string[][] = [];
 
       // 배치 사이즈로 텍스트 분할
-      for (let i = 0; i < texts.length; i += this.batchSize) {
-        batches.push(texts.slice(i, i + this.batchSize));
+      for (let i = 0; i < validTexts.length; i += this.batchSize) {
+        batches.push(validTexts.slice(i, i + this.batchSize));
       }
 
       console.log(
-        `${texts.length}개의 텍스트를 ${batches.length}개 배치로 처리합니다.`
+        `${validTexts.length}개의 텍스트를 ${batches.length}개 배치로 처리합니다.`
       );
 
       // 각 배치에 대해 병렬로 임베딩 요청 생성
@@ -93,18 +99,42 @@ export class EmbeddingService {
   /**
    * 코드 임베딩을 위한 전처리 수행
    */
-  preprocessCodeForEmbedding(code: string): string {
-    // 주석 제거
-    code = code.replace(/\/\/.*$/gm, "");
-    code = code.replace(/\/\*[\s\S]*?\*\//g, "");
+  preprocessCodeForEmbedding(code: string, filePath?: string): string {
+    if (!code || typeof code !== "string") {
+      return "";
+    }
 
-    // 연속된 공백 제거
-    code = code.replace(/\s+/g, " ");
+    try {
+      // 주석 제거
+      let processed = code.replace(/\/\/.*$/gm, "");
+      processed = processed.replace(/\/\*[\s\S]*?\*\//g, "");
 
-    // 앞뒤 공백 제거
-    code = code.trim();
+      // 연속된 공백 제거
+      processed = processed.replace(/\s+/g, " ");
 
-    return code;
+      // 앞뒤 공백 제거
+      processed = processed.trim();
+
+      // 파일 경로 정보 추가
+      if (filePath) {
+        processed = `File: ${filePath}\n\nCode:\n${processed}`;
+      }
+
+      // 최소 길이 확인
+      if (processed.length < 1) {
+        return "";
+      }
+
+      // 최대 길이 제한 (OpenAI API 제한)
+      if (processed.length > 8000) {
+        processed = processed.slice(0, 8000);
+      }
+
+      return processed;
+    } catch (error) {
+      console.error("코드 전처리 중 오류:", error);
+      return "";
+    }
   }
 
   /**

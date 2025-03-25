@@ -728,3 +728,116 @@ export class CodeSearchService {
   }
 }
 ```
+
+## 코드 청킹 전략
+
+### 파일 경로 처리
+
+- 프로젝트 루트 기준 상대 경로 사용
+- 데이터베이스에는 상대 경로만 저장
+- 임베딩 생성 시 파일 경로 포함하여 문맥 제공
+
+### 코드 청크 추출
+
+- TypeScript AST 기반 코드 분석
+- 함수, 클래스, 인터페이스, 타입 선언 추출
+- 정확한 라인 번호 추적 (1-based indexing)
+- 의존성 관계 분석 및 양방향 매핑
+
+### 임베딩 생성
+
+- OpenAI text-embedding-3-small 모델 사용
+- 배치 처리로 성능 최적화 (최대 300개 단위)
+- 코드 전처리:
+  - 주석 제거
+  - 공백 정규화
+  - 파일 경로 정보 포함
+  - 최대 길이 제한 (8000자)
+- 병렬 처리로 대량 임베딩 생성
+
+### 에러 처리
+
+- 빈 문자열 및 유효하지 않은 입력 필터링
+- 임베딩 생성 실패 시 안전한 에러 처리
+- 디렉토리 순회 중 발생하는 오류 격리
+
+## 데이터 모델
+
+### 코드 청크 스키마
+
+```typescript
+interface CodeChunk {
+  id: string;
+  projectId: string;
+  path: string; // 프로젝트 루트 기준 상대 경로
+  code: string;
+  type: "function" | "class" | "type" | "constant";
+  name: string;
+  lineStart: number; // 1-based
+  lineEnd: number; // 1-based
+  dependencies: string[];
+  dependents: string[];
+  embedding?: number[] | null;
+}
+```
+
+## 서비스 아키텍처
+
+### EmbeddingService
+
+```typescript
+class EmbeddingService {
+  private batchSize: number = 300;
+
+  preprocessCodeForEmbedding(code: string, filePath?: string): string {
+    // 코드 전처리 및 파일 경로 포함
+  }
+
+  async generateBatchEmbeddings(texts: string[]): Promise<number[][]> {
+    // 배치 단위 병렬 처리
+  }
+}
+```
+
+### CodeChunkingService
+
+```typescript
+class CodeChunkingService {
+  private projectRoot: string;
+  private projectId: string;
+
+  async extractCodeChunksFromFile(filePath: string): Promise<CodeChunk[]> {
+    // 상대 경로 변환
+    // AST 기반 코드 분석
+    // 청크 추출 및 임베딩 생성
+  }
+}
+```
+
+## 성능 최적화
+
+1. **배치 처리**
+
+   - 임베딩 생성을 300개 단위로 배치 처리
+   - Promise.all을 사용한 병렬 처리
+
+2. **메모리 관리**
+
+   - 대용량 코드 처리를 위한 청크 단위 처리
+   - 텍스트 길이 제한으로 메모리 사용량 관리
+
+3. **에러 복구**
+   - 개별 파일 처리 실패 시 전체 프로세스 유지
+   - 실패한 항목 로깅 및 건너뛰기
+
+## API 사용량 최적화
+
+1. **OpenAI API**
+
+   - 배치 처리로 API 호출 최소화
+   - 입력 데이터 전처리로 불필요한 요청 방지
+   - 에러 발생 시 재시도 로직 구현 예정
+
+2. **파일 시스템**
+   - 필요한 파일만 선택적으로 처리
+   - node_modules, .git 등 불필요한 디렉토리 제외

@@ -1,9 +1,9 @@
 import * as path from "path";
 import * as fs from "fs/promises";
-import { SymbolInformation } from "vscode-languageserver-protocol";
-import { LspClient } from "./lspClient";
+import * as ts from "typescript";
 import { v4 as uuidv4 } from "uuid";
 import { EmbeddingService } from "./embeddingService";
+import * as process from "process";
 
 // 코드 청크 인터페이스
 export interface CodeChunk {
@@ -22,236 +22,245 @@ export interface CodeChunk {
 
 // 코드 청킹 서비스
 export class CodeChunkingService {
-  private lspClient: LspClient;
   private projectRoot: string;
   private projectId: string;
   private embeddingService: EmbeddingService;
+  private program: ts.Program | null = null;
+  private typeChecker: ts.TypeChecker | null = null;
 
   constructor(projectRoot: string, projectId: string, apiKey?: string) {
     this.projectRoot = projectRoot;
     this.projectId = projectId;
-    this.lspClient = new LspClient(projectRoot);
     this.embeddingService = new EmbeddingService(apiKey);
   }
 
   // 서비스 초기화
   async initialize(): Promise<void> {
-    await this.lspClient.start();
+    // tsconfig.json 찾기
+    const tsconfigPath = ts.findConfigFile(
+      this.projectRoot,
+      ts.sys.fileExists,
+      "tsconfig.json"
+    );
+
+    if (!tsconfigPath) {
+      console.log("tsconfig.json을 찾을 수 없습니다. 기본 설정을 사용합니다.");
+      // 기본 컴파일러 옵션 설정
+      const compilerOptions: ts.CompilerOptions = {
+        target: ts.ScriptTarget.ES2020,
+        module: ts.ModuleKind.CommonJS,
+        moduleResolution: ts.ModuleResolutionKind.NodeJs,
+        esModuleInterop: true,
+        skipLibCheck: true,
+        strict: true,
+      };
+
+      // 프로그램 생성
+      this.program = ts.createProgram([], compilerOptions);
+    } else {
+      // tsconfig.json 파싱
+      const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+      const parsedConfig = ts.parseJsonConfigFileContent(
+        configFile.config,
+        ts.sys,
+        path.dirname(tsconfigPath)
+      );
+
+      // 프로그램 생성
+      this.program = ts.createProgram(
+        parsedConfig.fileNames,
+        parsedConfig.options
+      );
+    }
+
+    this.typeChecker = this.program.getTypeChecker();
   }
 
   // 서비스 종료
   async shutdown(): Promise<void> {
-    await this.lspClient.stop();
+    this.program = null;
+    this.typeChecker = null;
   }
 
-  private isFunctionVariable(code: string): boolean {
-    const firstLine = code.split("\n")[0].trim();
-    // 화살표 함수 또는 함수 표현식 패턴
-    const arrowFunctionRegex =
-      /^\s*(const|let|var)\s+\w+\s*=\s*(async\s*)?\(.*\)\s*=>/;
-    const functionExpressionRegex =
-      /^\s*(const|let|var)\s+\w+\s*=\s*(async\s*)?function\s*\(/;
-    return (
-      arrowFunctionRegex.test(firstLine) ||
-      functionExpressionRegex.test(firstLine)
+  private getNodePosition(
+    node: ts.Node,
+    sourceFile: ts.SourceFile
+  ): {
+    lineStart: number;
+    lineEnd: number;
+  } {
+    const { line: lineStart } = ts.getLineAndCharacterOfPosition(
+      sourceFile,
+      node.getStart(sourceFile)
     );
+    const { line: lineEnd } = ts.getLineAndCharacterOfPosition(
+      sourceFile,
+      node.getEnd()
+    );
+    return { lineStart: lineStart + 1, lineEnd: lineEnd + 1 };
+  }
+
+  private isFunctionLike(node: ts.Node): boolean {
+    return (
+      ts.isFunctionDeclaration(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isArrowFunction(node) ||
+      ts.isFunctionExpression(node)
+    );
+  }
+
+  private getNodeType(
+    node: ts.Node
+  ): "function" | "class" | "type" | "constant" | null {
+    if (this.isFunctionLike(node)) {
+      return "function";
+    } else if (ts.isClassDeclaration(node)) {
+      return "class";
+    } else if (
+      ts.isInterfaceDeclaration(node) ||
+      ts.isTypeAliasDeclaration(node)
+    ) {
+      return "type";
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      node.parent &&
+      ts.isVariableDeclarationList(node.parent) &&
+      node.parent.flags & ts.NodeFlags.Const
+    ) {
+      // 변수가 함수인지 확인
+      const initializer = node.initializer;
+      if (initializer && this.isFunctionLike(initializer)) {
+        return "function";
+      }
+      return "constant";
+    }
+    return null;
+  }
+
+  private collectDependencies(
+    node: ts.Node,
+    sourceFile: ts.SourceFile,
+    typeChecker: ts.TypeChecker
+  ): string[] {
+    const dependencies = new Set<string>();
+
+    // 노드를 재귀적으로 방문하여 의존성 수집
+    const visit = (node: ts.Node) => {
+      // 식별자 처리
+      if (ts.isIdentifier(node)) {
+        const symbol = typeChecker.getSymbolAtLocation(node);
+        if (symbol) {
+          const declaration = symbol.declarations?.[0];
+          if (declaration) {
+            const name = symbol.getName();
+            dependencies.add(name);
+          }
+        }
+      }
+
+      // 타입 참조 처리
+      if (ts.isTypeReferenceNode(node)) {
+        const type = typeChecker.getTypeFromTypeNode(node);
+        const symbol = type.getSymbol();
+        if (symbol) {
+          const name = symbol.getName();
+          dependencies.add(name);
+        }
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(node);
+    return Array.from(dependencies);
   }
 
   private async extractCodeChunksFromFile(
     filePath: string
   ): Promise<CodeChunk[]> {
-    const content = await fs.readFile(filePath, "utf-8");
-    const symbols = await this.lspClient.getSymbols(filePath);
-    const chunks: CodeChunk[] = [];
-    const lines = content.split("\n");
+    if (!this.program || !this.typeChecker) {
+      throw new Error("TypeScript 프로그램이 초기화되지 않았습니다.");
+    }
 
-    if (!symbols || symbols.length === 0) {
-      console.log(`파일에서 심볼을 찾을 수 없음: ${filePath}`);
+    const sourceFile = this.program.getSourceFile(filePath);
+    if (!sourceFile) {
+      console.log(`파일을 찾을 수 없음: ${filePath}`);
       return [];
     }
 
-    // 클래스(5), 함수(12), 메서드(6), 인터페이스(11), 타입 별칭(26), 변수(13) 필터링
-    const relevantSymbols = symbols.filter((symbol) =>
-      [5, 12, 6, 11, 26, 13].includes(symbol.kind)
-    );
+    // 상대 경로 계산
+    const relativePath = path.relative(this.projectRoot, filePath);
 
-    for (const symbol of relevantSymbols) {
-      const startLine = symbol.location.range.start.line;
-      const endLine = symbol.location.range.end.line;
-      const codeLines = lines.slice(startLine, endLine + 1);
-      const code = codeLines.join("\n");
-      const name = symbol.name;
+    const chunks: CodeChunk[] = [];
+    const content = await fs.readFile(filePath, "utf-8");
+    const lines = content.split("\n");
 
-      let type: "function" | "class" | "type" | "constant" | null = null;
-
-      if (symbol.kind === 5) {
-        type = "class";
-      } else if (symbol.kind === 12 || symbol.kind === 6) {
-        type = "function";
-      } else if (symbol.kind === 11 || symbol.kind === 26) {
-        type = "type";
-      } else if (symbol.kind === 13) {
-        if (this.isFunctionVariable(code)) {
-          type = "function"; // 함수로 정의된 변수
-        } else {
-          type = "constant"; // 함수가 아닌 const 상수
-        }
-      }
-
+    const visit = (node: ts.Node) => {
+      const type = this.getNodeType(node);
       if (type) {
-        const chunk: CodeChunk = {
-          id: uuidv4(),
-          projectId: this.projectId,
-          path: filePath,
-          code,
-          type,
-          name,
-          lineStart: startLine,
-          lineEnd: endLine,
-          dependencies: this.analyzeDependencies(code),
-          dependents: [],
-          embedding: null,
-        };
-        chunks.push(chunk);
-      }
-    }
+        const { lineStart, lineEnd } = this.getNodePosition(node, sourceFile);
+        const codeLines = lines.slice(lineStart - 1, lineEnd);
+        const code = codeLines.join("\n");
 
-    this.analyzeDependencyGraph(chunks);
-    return chunks;
-  }
-  // 코드에서 의존성 분석
-  private analyzeDependencies(code: string): string[] {
-    const dependencies: string[] = [];
-
-    try {
-      // 1. import 문 분석
-      const importRegex =
-        /import\s+(?:(?:{([^}]+)})|(?:(\w+)))\s+from\s+['"][^'"]+['"]/g;
-      let match;
-
-      while ((match = importRegex.exec(code)) !== null) {
-        if (match[1]) {
-          // 중괄호 내 가져오기 항목 (예: import { useState, useEffect } from 'react')
-          const imports = match[1]
-            .split(",")
-            .map((i) => i.trim().split(" as ")[0].trim());
-          dependencies.push(...imports);
-        } else if (match[2]) {
-          // 기본 가져오기 (예: import React from 'react')
-          dependencies.push(match[2]);
-        }
-      }
-
-      // 2. 클래스 확장 분석
-      const extendsRegex = /class\s+\w+\s+extends\s+(\w+)/g;
-      while ((match = extendsRegex.exec(code)) !== null) {
-        if (match[1]) {
-          dependencies.push(match[1]);
-        }
-      }
-
-      // 3. 인터페이스 확장 분석
-      const interfaceRegex = /interface\s+\w+\s+extends\s+([^{]+)/g;
-      while ((match = interfaceRegex.exec(code)) !== null) {
-        if (match[1]) {
-          const interfaces = match[1].split(",").map((i) => i.trim());
-          dependencies.push(...interfaces);
-        }
-      }
-
-      // 4. 타입 참조 분석
-      const typeRegex = /:\s*(\w+)(?:<[^>]*>)?/g;
-      while ((match = typeRegex.exec(code)) !== null) {
+        let name = "";
         if (
-          match[1] &&
-          ![
-            "string",
-            "number",
-            "boolean",
-            "any",
-            "void",
-            "null",
-            "undefined",
-          ].includes(match[1])
+          (ts.isFunctionDeclaration(node) ||
+            ts.isClassDeclaration(node) ||
+            ts.isInterfaceDeclaration(node) ||
+            ts.isTypeAliasDeclaration(node)) &&
+          node.name &&
+          ts.isIdentifier(node.name)
         ) {
-          dependencies.push(match[1]);
+          name = node.name.text;
+        } else if (
+          ts.isVariableDeclaration(node) &&
+          ts.isIdentifier(node.name)
+        ) {
+          name = node.name.text;
+        }
+
+        if (name) {
+          const dependencies = this.collectDependencies(
+            node,
+            sourceFile,
+            this.typeChecker!
+          );
+
+          const chunk: CodeChunk = {
+            id: uuidv4(),
+            projectId: this.projectId,
+            path: relativePath, // 상대 경로 사용
+            code,
+            type,
+            name,
+            lineStart,
+            lineEnd,
+            dependencies,
+            dependents: [],
+            embedding: null,
+          };
+          chunks.push(chunk);
         }
       }
 
-      // 5. 중복 제거 및 JavaScript 내장 객체/함수 제외
-      const jsBuiltins = [
-        "Array",
-        "Object",
-        "String",
-        "Number",
-        "Boolean",
-        "Date",
-        "Math",
-        "RegExp",
-        "Function",
-        "Promise",
-        "Set",
-        "Map",
-        "WeakMap",
-        "WeakSet",
-        "Symbol",
-        "Error",
-        "JSON",
-        "Int8Array",
-        "Uint8Array",
-        "console",
-        "setTimeout",
-        "setInterval",
-        "clearTimeout",
-        "clearInterval",
-        "requestAnimationFrame",
-        "localStorage",
-        "sessionStorage",
-        "Event",
-        "XMLHttpRequest",
-        "fetch",
-        "document",
-        "window",
-        "Buffer",
-        "process",
-        "require",
-        "module",
-        "exports",
-        "global",
-        "__dirname",
-        "__filename",
-      ];
+      ts.forEachChild(node, visit);
+    };
 
-      return Array.from(new Set(dependencies)).filter(
-        (dep) => !jsBuiltins.includes(dep)
-      );
-    } catch (err) {
-      console.error("의존성 분석 중 오류:", err);
-      return dependencies;
-    }
-  }
-
-  private analyzeDependencyGraph(chunks: CodeChunk[]): void {
-    const chunkMap = new Map<string, CodeChunk>();
-    // 청크를 이름으로 매핑
-    chunks.forEach((chunk) => {
-      chunkMap.set(chunk.name, chunk);
-    });
-
-    // 각 청크의 dependencies를 분석하여 dependents 업데이트
-    chunks.forEach((chunk) => {
-      chunk.dependencies.forEach((depName) => {
-        const depChunk = chunkMap.get(depName);
-        if (depChunk && !depChunk.dependents.includes(chunk.name)) {
-          depChunk.dependents.push(chunk.name); // dependents에 추가
-        }
-      });
-    });
+    visit(sourceFile);
+    return chunks;
   }
 
   // 프로젝트 전체 코드 청킹
   async chunkEntireProject(): Promise<CodeChunk[]> {
-    return this.chunkDirectory(this.projectRoot);
+    const chunks = await this.chunkDirectory(this.projectRoot);
+
+    // 청크 추출 후 의존성 후처리 작업 수행
+    if (chunks.length > 0) {
+      this.processChunkDependencies(chunks);
+      this.analyzeChunkDependencyGraph(chunks);
+    }
+
+    return chunks;
   }
 
   // 디렉토리 내의 모든 파일 코드 청킹 (병렬 처리)
@@ -292,7 +301,6 @@ export class CodeChunkingService {
       } catch (error) {
         console.error(`오류: ${file} 청킹 실패:`, error);
         failedFiles++;
-        // 개별 파일 오류가 전체 프로세스를 중단시키지 않도록 빈 배열 반환
         return [] as CodeChunk[];
       }
     });
@@ -324,7 +332,7 @@ export class CodeChunkingService {
 
       // 전처리된 코드 준비
       const preprocessedCodes = chunks.map((chunk) =>
-        this.embeddingService.preprocessCodeForEmbedding(chunk.code)
+        this.embeddingService.preprocessCodeForEmbedding(chunk.code, chunk.path)
       );
 
       // 배치로 임베딩 생성 (내부적으로 병렬 처리됨)
@@ -345,7 +353,9 @@ export class CodeChunkingService {
   }
 
   // 특정 디렉토리에서 모든 TypeScript/JavaScript 파일 찾기
-  async findTsFilesInDirectory(directoryPath: string): Promise<string[]> {
+  private async findTsFilesInDirectory(
+    directoryPath: string
+  ): Promise<string[]> {
     const result: string[] = [];
     console.log(`디렉토리: ${directoryPath}에서 파일 검색 시작`);
 
@@ -392,7 +402,9 @@ export class CodeChunkingService {
       ? filePath
       : path.join(this.projectRoot, filePath);
 
+    console.log(`파일 청킹 시작: ${absolutePath}`);
     const chunks = await this.extractCodeChunksFromFile(absolutePath);
+    console.log(`파일 청킹 완료: ${chunks.length}개 코드 청크 추출`);
 
     // 코드 청크에 대한 임베딩 배치 생성
     if (chunks.length > 0) {
@@ -400,5 +412,75 @@ export class CodeChunkingService {
     }
 
     return chunks;
+  }
+
+  // 청크 의존성 처리
+  private processChunkDependencies(chunks: CodeChunk[]): void {
+    console.log("코드 청크 의존성 후처리 시작");
+
+    // 이름 -> 청크 맵 생성
+    const nameToChunkMap = new Map<string, CodeChunk>();
+    for (const chunk of chunks) {
+      nameToChunkMap.set(chunk.name, chunk);
+    }
+
+    // 의존성 해결
+    for (const chunk of chunks) {
+      const resolvedDeps: string[] = [];
+
+      for (const depName of chunk.dependencies) {
+        const targetChunk = nameToChunkMap.get(depName);
+        if (targetChunk && targetChunk.id !== chunk.id) {
+          resolvedDeps.push(depName);
+
+          // 양방향 의존성 설정
+          if (!targetChunk.dependents.includes(chunk.name)) {
+            targetChunk.dependents.push(chunk.name);
+          }
+        }
+      }
+
+      chunk.dependencies = resolvedDeps;
+    }
+
+    console.log("코드 청크 의존성 처리 완료");
+  }
+
+  // 의존성 그래프 분석
+  private analyzeChunkDependencyGraph(chunks: CodeChunk[]): void {
+    console.log("의존성 그래프 분석 시작");
+
+    // 이름 -> 청크 맵 생성
+    const nameToChunkMap = new Map<string, CodeChunk>();
+    for (const chunk of chunks) {
+      nameToChunkMap.set(chunk.name, chunk);
+    }
+
+    // 각 청크의 전체 의존성 트리 분석
+    let totalDependencies = 0;
+    for (const chunk of chunks) {
+      const visited = new Set<string>();
+      const collectAllDeps = (name: string): string[] => {
+        if (visited.has(name)) return [];
+        visited.add(name);
+
+        const targetChunk = nameToChunkMap.get(name);
+        if (!targetChunk) return [];
+
+        const allDeps = [...targetChunk.dependencies];
+        for (const dep of targetChunk.dependencies) {
+          const subDeps = collectAllDeps(dep);
+          allDeps.push(...subDeps);
+        }
+        return Array.from(new Set(allDeps));
+      };
+
+      const allDeps = collectAllDeps(chunk.name);
+      totalDependencies += allDeps.length;
+    }
+
+    console.log(
+      `의존성 그래프 분석 완료: 총 ${totalDependencies}개 의존 관계 식별됨`
+    );
   }
 }

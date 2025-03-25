@@ -342,3 +342,172 @@ export interface IEmbeddingService {
 3. 벡터 유사도 검색 수행 (프로젝트별 필터링 포함)
 4. 관련 코드 청크 및 유사도 점수 반환
 5. 요청 시 추가 메타데이터 (예: 의존성 그래프) 포함
+
+## 코드 분석 패턴
+
+### 파일 경로 처리
+
+```typescript
+class PathHandler {
+  constructor(private projectRoot: string) {}
+
+  toRelative(absolutePath: string): string {
+    return path.relative(this.projectRoot, absolutePath);
+  }
+
+  toAbsolute(relativePath: string): string {
+    return path.join(this.projectRoot, relativePath);
+  }
+}
+```
+
+### 코드 청크 추출
+
+```typescript
+interface CodeChunkExtractor {
+  extractFromFile(filePath: string): Promise<CodeChunk[]>;
+  processChunks(chunks: CodeChunk[]): void;
+  generateEmbeddings(chunks: CodeChunk[]): Promise<void>;
+}
+```
+
+### 임베딩 생성
+
+```typescript
+interface EmbeddingGenerator {
+  preprocessCode(code: string, filePath?: string): string;
+  generateBatch(texts: string[]): Promise<number[][]>;
+  handleErrors(error: Error): void;
+}
+```
+
+## 에러 처리 패턴
+
+### 임베딩 생성 에러
+
+```typescript
+class EmbeddingError extends Error {
+  constructor(
+    public readonly code: string,
+    public readonly input: string,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+function handleEmbeddingError(error: EmbeddingError): void {
+  // 로깅
+  // 재시도 로직
+  // 대체 처리
+}
+```
+
+### 파일 시스템 에러
+
+```typescript
+class FileSystemError extends Error {
+  constructor(
+    public readonly path: string,
+    public readonly operation: string,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+function handleFileSystemError(error: FileSystemError): void {
+  // 로깅
+  // 건너뛰기
+  // 사용자 알림
+}
+```
+
+## 배치 처리 패턴
+
+### 청크 배치 처리
+
+```typescript
+class ChunkBatchProcessor {
+  private batchSize: number = 300;
+
+  async processBatch<T>(
+    items: T[],
+    processor: (batch: T[]) => Promise<void>
+  ): Promise<void> {
+    const batches: T[][] = [];
+    for (let i = 0; i < items.length; i += this.batchSize) {
+      batches.push(items.slice(i, i + this.batchSize));
+    }
+
+    await Promise.all(batches.map(processor));
+  }
+}
+```
+
+### 병렬 처리
+
+```typescript
+class ParallelProcessor {
+  async processFiles(
+    files: string[],
+    processor: (file: string) => Promise<void>
+  ): Promise<void> {
+    const results = await Promise.allSettled(files.map(processor));
+    this.handleResults(results);
+  }
+
+  private handleResults(results: PromiseSettledResult<void>[]): void {
+    // 성공/실패 집계
+    // 에러 로깅
+    // 재시도 큐 관리
+  }
+}
+```
+
+## 데이터 변환 패턴
+
+### 코드 전처리
+
+```typescript
+interface CodePreprocessor {
+  removeComments(code: string): string;
+  normalizeWhitespace(code: string): string;
+  truncate(code: string, maxLength: number): string;
+  addContext(code: string, context: Record<string, string>): string;
+}
+```
+
+### 임베딩 후처리
+
+```typescript
+interface EmbeddingPostprocessor {
+  normalize(embedding: number[]): number[];
+  validate(embedding: number[]): boolean;
+  store(embedding: number[], metadata: Record<string, any>): Promise<void>;
+}
+```
+
+## 모니터링 패턴
+
+### 성능 추적
+
+```typescript
+interface PerformanceTracker {
+  startOperation(name: string): void;
+  endOperation(name: string): void;
+  getMetrics(): Record<string, number>;
+  logMetrics(): void;
+}
+```
+
+### 리소스 모니터링
+
+```typescript
+interface ResourceMonitor {
+  trackMemoryUsage(): void;
+  trackApiCalls(): void;
+  trackProcessingTime(): void;
+  generateReport(): string;
+}
+```
