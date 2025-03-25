@@ -345,146 +345,210 @@ export interface IEmbeddingService {
 
 ## 코드 분석 패턴
 
-### 파일 경로 처리
+### AST 기반 코드 분석
 
 ```typescript
-class PathHandler {
-  constructor(private projectRoot: string) {}
+class AstAnalyzer {
+  private program: ts.Program;
+  private typeChecker: ts.TypeChecker;
 
-  toRelative(absolutePath: string): string {
-    return path.relative(this.projectRoot, absolutePath);
-  }
+  analyzeNode(node: ts.Node): void {
+    // AST 노드 분석
+    if (ts.isFunctionDeclaration(node)) {
+      // 함수 선언 처리
+    } else if (ts.isClassDeclaration(node)) {
+      // 클래스 선언 처리
+    } else if (ts.isInterfaceDeclaration(node)) {
+      // 인터페이스 선언 처리
+    }
 
-  toAbsolute(relativePath: string): string {
-    return path.join(this.projectRoot, relativePath);
+    // 재귀적으로 자식 노드 방문
+    ts.forEachChild(node, (child) => this.analyzeNode(child));
   }
 }
 ```
 
-### 코드 청크 추출
+### 타입 체커 활용
+
+```typescript
+class TypeChecker {
+  private typeChecker: ts.TypeChecker;
+
+  getSymbolInfo(node: ts.Node): ts.Symbol | undefined {
+    return this.typeChecker.getSymbolAtLocation(node);
+  }
+
+  getTypeInfo(node: ts.Node): ts.Type {
+    return this.typeChecker.getTypeAtLocation(node);
+  }
+}
+```
+
+### 의존성 분석
+
+```typescript
+class DependencyAnalyzer {
+  private typeChecker: ts.TypeChecker;
+
+  analyzeDependencies(node: ts.Node): string[] {
+    const dependencies = new Set<string>();
+
+    // 식별자 처리
+    if (ts.isIdentifier(node)) {
+      const symbol = this.typeChecker.getSymbolAtLocation(node);
+      if (symbol?.declarations?.[0]) {
+        dependencies.add(symbol.getName());
+      }
+    }
+
+    // 타입 참조 처리
+    if (ts.isTypeReferenceNode(node)) {
+      const type = this.typeChecker.getTypeFromTypeNode(node);
+      const symbol = type.getSymbol();
+      if (symbol) {
+        dependencies.add(symbol.getName());
+      }
+    }
+
+    return Array.from(dependencies);
+  }
+}
+```
+
+## 코드 청크 패턴
+
+### 청크 추출기
 
 ```typescript
 interface CodeChunkExtractor {
-  extractFromFile(filePath: string): Promise<CodeChunk[]>;
-  processChunks(chunks: CodeChunk[]): void;
-  generateEmbeddings(chunks: CodeChunk[]): Promise<void>;
+  extractFromNode(node: ts.Node): CodeChunk | null;
+  processChunk(chunk: CodeChunk): void;
+  generateEmbedding(chunk: CodeChunk): Promise<void>;
 }
 ```
 
-### 임베딩 생성
+### 청크 프로세서
+
+```typescript
+class ChunkProcessor {
+  private batchSize: number = 300;
+
+  async processBatch(chunks: CodeChunk[]): Promise<void> {
+    const batches = this.createBatches(chunks);
+    await Promise.all(batches.map(this.processBatchItem));
+  }
+
+  private createBatches(chunks: CodeChunk[]): CodeChunk[][] {
+    return chunks.reduce((acc, chunk, i) => {
+      const batchIndex = Math.floor(i / this.batchSize);
+      if (!acc[batchIndex]) acc[batchIndex] = [];
+      acc[batchIndex].push(chunk);
+      return acc;
+    }, [] as CodeChunk[][]);
+  }
+}
+```
+
+## 임베딩 패턴
+
+### 임베딩 생성기
 
 ```typescript
 interface EmbeddingGenerator {
   preprocessCode(code: string, filePath?: string): string;
   generateBatch(texts: string[]): Promise<number[][]>;
-  handleErrors(error: Error): void;
+  handleError(error: Error): void;
+}
+```
+
+### 임베딩 프로세서
+
+```typescript
+class EmbeddingProcessor {
+  async processBatch(texts: string[]): Promise<number[][]> {
+    try {
+      const preprocessed = texts.map(this.preprocess);
+      const embeddings = await this.generateEmbeddings(preprocessed);
+      return embeddings;
+    } catch (error) {
+      this.handleError(error);
+      throw error;
+    }
+  }
 }
 ```
 
 ## 에러 처리 패턴
 
-### 임베딩 생성 에러
+### AST 분석 에러
+
+```typescript
+class AstError extends Error {
+  constructor(
+    public readonly node: ts.Node,
+    public readonly phase: string,
+    message: string
+  ) {
+    super(message);
+  }
+}
+```
+
+### 임베딩 에러
 
 ```typescript
 class EmbeddingError extends Error {
   constructor(
-    public readonly code: string,
     public readonly input: string,
+    public readonly phase: string,
     message: string
   ) {
     super(message);
   }
-}
-
-function handleEmbeddingError(error: EmbeddingError): void {
-  // 로깅
-  // 재시도 로직
-  // 대체 처리
-}
-```
-
-### 파일 시스템 에러
-
-```typescript
-class FileSystemError extends Error {
-  constructor(
-    public readonly path: string,
-    public readonly operation: string,
-    message: string
-  ) {
-    super(message);
-  }
-}
-
-function handleFileSystemError(error: FileSystemError): void {
-  // 로깅
-  // 건너뛰기
-  // 사용자 알림
 }
 ```
 
 ## 배치 처리 패턴
 
-### 청크 배치 처리
-
-```typescript
-class ChunkBatchProcessor {
-  private batchSize: number = 300;
-
-  async processBatch<T>(
-    items: T[],
-    processor: (batch: T[]) => Promise<void>
-  ): Promise<void> {
-    const batches: T[][] = [];
-    for (let i = 0; i < items.length; i += this.batchSize) {
-      batches.push(items.slice(i, i + this.batchSize));
-    }
-
-    await Promise.all(batches.map(processor));
-  }
-}
-```
-
 ### 병렬 처리
 
 ```typescript
 class ParallelProcessor {
-  async processFiles(
-    files: string[],
-    processor: (file: string) => Promise<void>
-  ): Promise<void> {
-    const results = await Promise.allSettled(files.map(processor));
-    this.handleResults(results);
-  }
-
-  private handleResults(results: PromiseSettledResult<void>[]): void {
-    // 성공/실패 집계
-    // 에러 로깅
-    // 재시도 큐 관리
+  async processItems<T, R>(
+    items: T[],
+    processor: (item: T) => Promise<R>,
+    batchSize: number
+  ): Promise<R[]> {
+    const batches = this.createBatches(items, batchSize);
+    const results = await Promise.all(
+      batches.map((batch) => Promise.all(batch.map(processor)))
+    );
+    return results.flat();
   }
 }
 ```
 
-## 데이터 변환 패턴
-
-### 코드 전처리
+### 에러 복구
 
 ```typescript
-interface CodePreprocessor {
-  removeComments(code: string): string;
-  normalizeWhitespace(code: string): string;
-  truncate(code: string, maxLength: number): string;
-  addContext(code: string, context: Record<string, string>): string;
-}
-```
+class ErrorRecovery {
+  async processWithRecovery<T>(
+    processor: () => Promise<T>,
+    maxRetries: number = 3
+  ): Promise<T> {
+    let lastError: Error | null = null;
 
-### 임베딩 후처리
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await processor();
+      } catch (error) {
+        lastError = error;
+        await this.wait(Math.pow(2, i) * 1000);
+      }
+    }
 
-```typescript
-interface EmbeddingPostprocessor {
-  normalize(embedding: number[]): number[];
-  validate(embedding: number[]): boolean;
-  store(embedding: number[], metadata: Record<string, any>): Promise<void>;
+    throw lastError;
+  }
 }
 ```
 
@@ -493,21 +557,34 @@ interface EmbeddingPostprocessor {
 ### 성능 추적
 
 ```typescript
-interface PerformanceTracker {
-  startOperation(name: string): void;
-  endOperation(name: string): void;
-  getMetrics(): Record<string, number>;
-  logMetrics(): void;
+class PerformanceTracker {
+  private metrics: Map<string, number> = new Map();
+
+  trackOperation(name: string, duration: number): void {
+    const current = this.metrics.get(name) || 0;
+    this.metrics.set(name, current + duration);
+  }
+
+  getMetrics(): Record<string, number> {
+    return Object.fromEntries(this.metrics);
+  }
 }
 ```
 
 ### 리소스 모니터링
 
 ```typescript
-interface ResourceMonitor {
-  trackMemoryUsage(): void;
-  trackApiCalls(): void;
-  trackProcessingTime(): void;
-  generateReport(): string;
+class ResourceMonitor {
+  private memoryUsage: number[] = [];
+
+  trackMemory(): void {
+    this.memoryUsage.push(process.memoryUsage().heapUsed);
+  }
+
+  getAverageMemory(): number {
+    return (
+      this.memoryUsage.reduce((a, b) => a + b, 0) / this.memoryUsage.length
+    );
+  }
 }
 ```

@@ -3,7 +3,6 @@ import * as fs from "fs/promises";
 import * as ts from "typescript";
 import { v4 as uuidv4 } from "uuid";
 import { EmbeddingService } from "./embeddingService";
-import * as process from "process";
 
 // 코드 청크 인터페이스
 export interface CodeChunk {
