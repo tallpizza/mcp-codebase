@@ -3,9 +3,18 @@ import { Pool } from "pg";
 import { CodeChunk as CodeChunkDto } from "./codeChunkingService";
 import { codeChunks, projects } from "../db/schema";
 import { v4 as uuidv4 } from "uuid";
-import { eq, and } from "drizzle-orm";
+import {
+  eq,
+  and,
+  sql,
+  gt,
+  desc,
+  asc,
+  getTableColumns,
+  cosineDistance,
+} from "drizzle-orm";
 import "dotenv/config";
-import { sql, count } from "drizzle-orm";
+import { count } from "drizzle-orm";
 
 // 코드 청크 저장소
 export class CodeChunkRepository {
@@ -22,6 +31,21 @@ export class CodeChunkRepository {
   // 연결 종료
   async disconnect(): Promise<void> {
     await this.pool.end();
+  }
+
+  // DB 초기화 및 필요한 함수 생성
+  async initializeDatabase(): Promise<void> {
+    try {
+      console.log("데이터베이스 초기화 중...");
+
+      // pgvector 확장 활성화 확인
+      await this.db.execute(sql`CREATE EXTENSION IF NOT EXISTS vector;`);
+
+      console.log("pgvector 확장이 활성화되었습니다.");
+    } catch (error) {
+      console.error("데이터베이스 초기화 중 오류 발생:", error);
+      throw error;
+    }
   }
 
   // 모든 프로젝트 조회
@@ -129,6 +153,8 @@ export class CodeChunkRepository {
       // 중복이 발견되지 않았거나, 기존 청크보다 더 최신 정보를 가진 경우 맵에 추가
       if (!uniqueMap.has(uniqueKey)) {
         uniqueMap.set(uniqueKey, chunk);
+      } else {
+        console.log(`중복 청크 제거: ${uniqueKey}`);
       }
     }
 
@@ -238,55 +264,6 @@ export class CodeChunkRepository {
     return result[0] || null;
   }
 
-  // 프로젝트 내 코드 청크 키워드 검색
-  // 임베딩을 사용한 유사 코드 청크 검색
-  async searchSimilarCodeChunks(
-    projectId: string,
-    embedding: number[],
-    limit: number = 10
-  ): Promise<CodeChunkDto[]> {
-    try {
-      console.log(
-        `프로젝트 ID ${projectId}의 유사 코드 청크 검색 중 (limit: ${limit})`
-      );
-
-      // pgvector의 <=> 연산자를 사용한 L2 거리 계산으로 유사도 검색
-      // 거리가 작을수록 유사도가 높음
-      const result = await this.db.execute(sql`
-        SELECT * FROM code_chunks
-        WHERE project_id = ${projectId}
-          AND embedding IS NOT NULL
-        ORDER BY embedding <=> ${JSON.stringify(embedding)}::float[]
-        LIMIT ${limit}
-      `);
-
-      // 데이터베이스 청크를 서비스 객체로 변환
-      const dbChunks = result as unknown as any[];
-      const chunks: CodeChunkDto[] = dbChunks.map((chunk) => ({
-        id: chunk.id,
-        projectId: chunk.project_id,
-        path: chunk.path,
-        code: chunk.code,
-        type: chunk.type,
-        name: chunk.name,
-        lineStart: chunk.line_start,
-        lineEnd: chunk.line_end,
-        dependencies: chunk.dependencies || [],
-        dependents: chunk.dependents || [],
-        // embedding은 생략
-      }));
-
-      console.log(`검색된 유사 코드 청크 수: ${chunks.length}`);
-      return chunks;
-    } catch (error) {
-      console.error(
-        `프로젝트 ID ${projectId}의 유사 코드 청크 검색 중 오류 발생:`,
-        error
-      );
-      throw error;
-    }
-  }
-
   // 임베딩을 사용한 코드 청크 유사도 검색 (코사인 유사도 사용)
   async searchCodeChunksByCosine(
     projectId: string,
@@ -299,37 +276,51 @@ export class CodeChunkRepository {
         `프로젝트 ID ${projectId}의 코사인 유사도 기반 코드 청크 검색 중 (limit: ${limit})`
       );
 
-      // pgvector의 <=> 연산자를 사용한 코사인 유사도 계산
-      const result = await this.db.execute(sql`
-        SELECT *, 1 - (embedding <=> ${JSON.stringify(
-          embedding
-        )}::float[]) as similarity
-        FROM code_chunks
-        WHERE project_id = ${projectId}
-          AND embedding IS NOT NULL
-        ORDER BY similarity DESC
-        LIMIT ${limit}
-      `);
+      // 코사인 유사도 계산
+      const similarity = sql<number>`1 - (${cosineDistance(
+        codeChunks.embedding,
+        embedding
+      )})`;
 
-      // 임계값 이상의 유사도를 가진 청크만 필터링
-      const dbChunks = result as unknown as any[];
-      const filteredChunks = dbChunks.filter(
-        (chunk) => chunk.similarity >= threshold
-      );
+      // ORM 방식으로 쿼리 작성
+      const results = await this.db
+        .select({
+          id: codeChunks.id,
+          projectId: codeChunks.projectId,
+          path: codeChunks.path,
+          code: codeChunks.code,
+          type: codeChunks.type,
+          name: codeChunks.name,
+          lineStart: codeChunks.lineStart,
+          lineEnd: codeChunks.lineEnd,
+          dependencies: codeChunks.dependencies,
+          dependents: codeChunks.dependents,
+          similarity: similarity,
+        })
+        .from(codeChunks)
+        .where(
+          and(
+            eq(codeChunks.projectId, projectId),
+            sql`${codeChunks.embedding} IS NOT NULL`,
+            gt(similarity, threshold)
+          )
+        )
+        .orderBy(desc(similarity))
+        .limit(limit);
 
-      // 데이터베이스 청크를 서비스 객체로 변환
-      const chunks: CodeChunkDto[] = filteredChunks.map((chunk) => ({
+      // 조회 결과를 DTO로 변환 (이미 적절한 속성 이름으로 선택됨)
+      const chunks: CodeChunkDto[] = results.map((chunk) => ({
         id: chunk.id,
-        projectId: chunk.project_id,
+        projectId: chunk.projectId,
         path: chunk.path,
         code: chunk.code,
         type: chunk.type,
         name: chunk.name,
-        lineStart: chunk.line_start,
-        lineEnd: chunk.line_end,
+        lineStart: chunk.lineStart,
+        lineEnd: chunk.lineEnd,
         dependencies: chunk.dependencies || [],
         dependents: chunk.dependents || [],
-        similarity: chunk.similarity, // 유사도 점수 추가
+        similarity: chunk.similarity,
       }));
 
       console.log(
@@ -339,6 +330,45 @@ export class CodeChunkRepository {
     } catch (error) {
       console.error(
         `프로젝트 ID ${projectId}의 코사인 유사도 기반 코드 청크 검색 중 오류 발생:`,
+        error
+      );
+      throw error;
+    }
+  }
+
+  // 프로젝트 내 코드 청크 키워드 검색
+  async searchCodeChunks(projectId: string, query: string, limit: number = 10) {
+    try {
+      // 간단한 텍스트 검색 (코드 내용에 키워드가 포함된 경우)
+      const results = await this.db
+        .select()
+        .from(codeChunks)
+        .where(
+          and(
+            eq(codeChunks.projectId, projectId),
+            sql`${codeChunks.code} ILIKE ${`%${query}%`}`
+          )
+        )
+        .limit(limit);
+
+      // 조회 결과를 DTO로 변환
+      const chunks: CodeChunkDto[] = results.map((chunk) => ({
+        id: chunk.id,
+        projectId: chunk.projectId,
+        path: chunk.path,
+        code: chunk.code,
+        type: chunk.type,
+        name: chunk.name,
+        lineStart: chunk.lineStart,
+        lineEnd: chunk.lineEnd,
+        dependencies: chunk.dependencies || [],
+        dependents: chunk.dependents || [],
+      }));
+
+      return chunks;
+    } catch (error) {
+      console.error(
+        `프로젝트 ID ${projectId}의 코드 청크 키워드 검색 중 오류 발생:`,
         error
       );
       throw error;

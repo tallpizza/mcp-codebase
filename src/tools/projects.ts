@@ -6,6 +6,10 @@ import { CodeChunk as CodeChunkDto } from "../services/codeChunkingService";
 import * as path from "path";
 import * as fs from "fs/promises";
 import "dotenv/config";
+import { codeChunks } from "../db/schema";
+import { projects } from "../db/schema";
+import { eq } from "drizzle-orm";
+import { db } from "../db";
 
 const repository = new CodeChunkRepository();
 
@@ -35,8 +39,8 @@ export type AnalyzeProjectArgs = {
   // 빈 타입 - 프로젝트 ID는 환경 변수에서 가져옴
 };
 
-export type SearchProjectArgs = {
-  query: string;
+export type CreateChunksArgs = {
+  filePath: string;
 };
 
 export type ListProjectsArgs = {
@@ -45,7 +49,7 @@ export type ListProjectsArgs = {
 
 // 프로젝트 생성 도구
 const createProject: Tool<CreateProjectArgs> = {
-  name: "mcp_project_create",
+  name: "create_project",
   description: "새로운 프로젝트를 생성합니다",
   inputSchema: {
     type: "object",
@@ -98,9 +102,55 @@ const createProject: Tool<CreateProjectArgs> = {
   },
 };
 
+// 프로젝트 목록 조회 도구
+const listProjects: Tool<ListProjectsArgs> = {
+  name: "list_projects",
+  description: "저장된 프로젝트 목록을 조회합니다",
+  inputSchema: {
+    type: "object",
+    properties: {},
+    required: [],
+  },
+  async execute() {
+    try {
+      const projects = await repository.getProjects();
+      const currentProjectId = getProjectId();
+
+      const projectsText = projects
+        .map(
+          (p) =>
+            `${p.id === currentProjectId ? "* " : ""}${p.name} (${
+              p.id
+            })\n   경로: ${p.path}\n   설명: ${p.description || "없음"}`
+        )
+        .join("\n\n");
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `프로젝트 목록:\n\n${
+              projectsText || "저장된 프로젝트가 없습니다"
+            }\n\n* 현재 선택된 프로젝트`,
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `프로젝트 목록 조회 중 오류가 발생했습니다: ${error.message}`,
+          },
+        ],
+      };
+    }
+  },
+};
+
 // 프로젝트 분석 도구
 const analyzeProject: Tool<AnalyzeProjectArgs> = {
-  name: "mcp_project_analyze",
+  name: "analyze_project",
   description: "프로젝트의 코드를 분석하고 임베딩을 생성합니다",
   inputSchema: {
     type: "object",
@@ -148,122 +198,66 @@ const analyzeProject: Tool<AnalyzeProjectArgs> = {
   },
 };
 
-// 프로젝트 목록 조회 도구
-const listProjects: Tool<ListProjectsArgs> = {
-  name: "mcp_project_list",
-  description: "저장된 프로젝트 목록을 조회합니다",
-  inputSchema: {
-    type: "object",
-    properties: {},
-    required: [],
-  },
-  async execute() {
-    try {
-      const projects = await repository.getProjects();
-      const currentProjectId = getProjectId();
-
-      const projectsText = projects
-        .map(
-          (p) =>
-            `${p.id === currentProjectId ? "* " : ""}${p.name} (${
-              p.id
-            })\n   경로: ${p.path}\n   설명: ${p.description || "없음"}`
-        )
-        .join("\n\n");
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `프로젝트 목록:\n\n${
-              projectsText || "저장된 프로젝트가 없습니다"
-            }\n\n* 현재 선택된 프로젝트`,
-          },
-        ],
-      };
-    } catch (error: any) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `프로젝트 목록 조회 중 오류가 발생했습니다: ${error.message}`,
-          },
-        ],
-      };
-    }
-  },
-};
-
-// 프로젝트 검색 도구
-const searchProject: Tool<SearchProjectArgs> = {
-  name: "mcp_project_search",
-  description: "프로젝트 내 코드를 키워드로 검색합니다",
+// 코드 청크 생성 도구
+const createChunks: Tool<CreateChunksArgs> = {
+  name: "create_code_chunks",
+  description: "파일의 코드를 분석하여 청크를 생성합니다",
   inputSchema: {
     type: "object",
     properties: {
-      query: {
+      filePath: {
         type: "string",
-        description: "검색 키워드",
+        description: "파일 경로",
       },
     },
-    required: ["query"],
+    required: ["filePath"],
   },
   async execute(args) {
     try {
       const projectId = getProjectId();
 
-      const repository = new CodeChunkRepository();
-      const project = await repository.getProject(projectId);
+      const projectList = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, projectId));
 
+      const project = projectList[0];
       if (!project) {
         throw new Error("프로젝트를 찾을 수 없습니다");
       }
 
-      // 임베딩 생성
-      const embeddingService = new EmbeddingService();
-      const queryEmbedding = await embeddingService.generateEmbedding(
-        args.query
-      );
-
-      // 벡터 검색 사용
-      const chunks = await repository.searchSimilarCodeChunks(
-        projectId,
-        queryEmbedding,
-        10
-      );
-
-      if (chunks.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `검색 결과가 없습니다: "${args.query}"`,
-            },
-          ],
-        };
+      const targetPath = path.join(project.path, args.filePath);
+      if (!targetPath.startsWith(project.path)) {
+        throw new Error("프로젝트 경로를 벗어난 접근입니다");
       }
 
-      const resultsText = chunks
-        .map(
-          (chunk: CodeChunkDto) =>
-            `## ${chunk.name} (${chunk.type})\n파일: ${chunk.path}\n라인: ${chunk.lineStart}-${chunk.lineEnd}\n\n\`\`\`\n${chunk.code}\n\`\`\``
-        )
-        .join("\n\n");
+      const chunkingService = new CodeChunkingService(project.path, projectId);
+      await chunkingService.initialize();
+
+      // 파일 처리 메서드 이름이 processFile이 아닌 경우 실제 메서드 이름으로 변경
+      const chunks = await chunkingService.chunkFile(targetPath);
+
+      // 청크를 DB에 삽입
+      await repository.saveCodeChunks(chunks);
 
       return {
         content: [
           {
             type: "text",
-            text: `"${args.query}" 검색 결과 (${chunks.length}개):\n\n${resultsText}`,
+            text: `${chunks.length}개의 코드 청크가 생성되었습니다.`,
           },
         ],
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "알 수 없는 오류가 발생했습니다";
       return {
         content: [
           {
             type: "text",
-            text: `프로젝트 검색 중 오류가 발생했습니다: ${error.message}`,
+            text: `코드 청크 생성 중 오류가 발생했습니다: ${errorMessage}`,
           },
         ],
       };
@@ -275,5 +269,5 @@ export const projectTools = [
   createProject,
   analyzeProject,
   listProjects,
-  searchProject,
+  createChunks,
 ];

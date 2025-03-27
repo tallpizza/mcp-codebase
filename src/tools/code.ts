@@ -18,81 +18,78 @@ const getProjectId = () => {
   return projectId;
 };
 
-export type CreateChunksArgs = {
-  filePath: string;
+export type GetChunkStatsArgs = {
+  // 빈 타입 - 프로젝트 ID는 환경 변수에서 가져옴
 };
-
 export type SearchChunksArgs = {
   query: string;
   limit?: number;
 };
 
-export type GetChunkStatsArgs = {
-  // 빈 타입 - 프로젝트 ID는 환경 변수에서 가져옴
+export type SearchProjectArgs = {
+  query: string;
 };
 
-// 코드 청크 생성 도구
-const createChunks: Tool<CreateChunksArgs> = {
-  name: "mcp_code_createChunks",
-  description: "파일의 코드를 분석하여 청크를 생성합니다",
+// 프로젝트 검색 도구
+const searchChunksByKeyword: Tool<SearchProjectArgs> = {
+  name: "keyword_search",
+  description: "프로젝트 내 코드를 키워드로 검색합니다",
   inputSchema: {
     type: "object",
     properties: {
-      filePath: {
+      query: {
         type: "string",
-        description: "파일 경로",
+        description: "검색 키워드",
       },
     },
-    required: ["filePath"],
+    required: ["query"],
   },
   async execute(args) {
     try {
       const projectId = getProjectId();
 
-      const projectList = await db
-        .select()
-        .from(projects)
-        .where(eq(projects.id, projectId));
+      const repository = new CodeChunkRepository();
+      const project = await repository.getProject(projectId);
 
-      const project = projectList[0];
       if (!project) {
         throw new Error("프로젝트를 찾을 수 없습니다");
       }
 
-      const targetPath = path.join(project.path, args.filePath);
-      if (!targetPath.startsWith(project.path)) {
-        throw new Error("프로젝트 경로를 벗어난 접근입니다");
+      // 벡터 검색 사용
+      const chunks = await repository.searchCodeChunks(projectId, args.query);
+
+      if (chunks.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `검색 결과가 없습니다: "${args.query}"`,
+            },
+          ],
+        };
       }
 
-      const chunkingService = new CodeChunkingService(project.path, projectId);
-      await chunkingService.initialize();
-
-      // 파일 처리 메서드 이름이 processFile이 아닌 경우 실제 메서드 이름으로 변경
-      const chunks = await chunkingService.chunkFile(targetPath);
-
-      // 청크를 DB에 삽입
-      for (const chunk of chunks) {
-        await db.insert(codeChunks).values(chunk);
-      }
+      const resultsText = chunks
+        .map(
+          (chunk: CodeChunkDto) =>
+            `## ${chunk.name} (${chunk.type})\n파일: ${chunk.path}\n라인: ${chunk.lineStart}-${chunk.lineEnd}\n\n\`\`\`\n${chunk.code}\n\`\`\``
+        )
+        .join("\n\n");
 
       return {
         content: [
           {
             type: "text",
-            text: `${chunks.length}개의 코드 청크가 생성되었습니다.`,
+            text: `"${args.query}" 검색 결과 (${chunks.length}개):\n\n${resultsText}`,
           },
         ],
       };
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "알 수 없는 오류가 발생했습니다";
+    } catch (error: any) {
       return {
         content: [
           {
             type: "text",
-            text: `코드 청크 생성 중 오류가 발생했습니다: ${errorMessage}`,
+            text: `프로젝트 검색 중 오류가 발생했습니다: ${error.message}`,
           },
         ],
       };
@@ -102,7 +99,7 @@ const createChunks: Tool<CreateChunksArgs> = {
 
 // 코드 청크 검색 도구
 const searchChunks: Tool<SearchChunksArgs> = {
-  name: "mcp_code_searchChunks",
+  name: "search_code_chunks",
   description: "코드 청크를 검색합니다",
   inputSchema: {
     type: "object",
@@ -145,7 +142,7 @@ const searchChunks: Tool<SearchChunksArgs> = {
         projectId,
         queryEmbedding,
         args.limit || 10,
-        0.7 // 유사도 임계값
+        0.3 // 유사도 임계값
       );
 
       // similarity 속성이 있음을 명시적으로 표현
@@ -255,4 +252,4 @@ const getChunkStats: Tool<GetChunkStatsArgs> = {
   },
 };
 
-export const codeTools = [createChunks, searchChunks, getChunkStats];
+export const codeTools = [searchChunksByKeyword, searchChunks, getChunkStats];
