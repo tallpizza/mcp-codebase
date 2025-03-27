@@ -248,7 +248,7 @@ export class CodeChunkRepository {
     projectId: string,
     embedding: number[],
     limit: number = 10,
-    threshold: number = 0.7 // 코사인 유사도 임계값 (0.7 이상만 반환)
+    threshold: number = 0.3
   ): Promise<CodeChunkDto[]> {
     try {
       // 코사인 유사도 계산

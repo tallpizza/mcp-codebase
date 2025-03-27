@@ -18,6 +18,7 @@ const getProjectId = () => {
 export type SearchChunksArgs = {
   query: string;
   limit?: number;
+  threshold?: number;
 };
 
 export type SearchProjectArgs = {
@@ -40,6 +41,11 @@ const searchChunks: Tool<SearchChunksArgs> = {
         type: "number",
         description: "검색 결과 제한",
         default: 10,
+      },
+      threshold: {
+        type: "number",
+        description: "유사도 임계값",
+        default: 0.3,
       },
     },
     required: ["query"],
@@ -70,7 +76,7 @@ const searchChunks: Tool<SearchChunksArgs> = {
         projectId,
         queryEmbedding,
         args.limit || 10,
-        0.3 // 유사도 임계값
+        args.threshold || 0.3 // 유사도 임계값
       );
 
       // similarity 속성이 있음을 명시적으로 표현
