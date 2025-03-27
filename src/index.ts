@@ -17,20 +17,50 @@ const SERVER_CONFIG = {
 // 모든 도구 수집
 const allTools = [...projectTools, ...fileTools, ...codeTools];
 
-// 환경 변수에서 프로젝트 ID 가져오기
-const getProjectId = () => {
-  const projectId = process.env.PROJECT_ID;
+// 프로젝트 ID 가져오기 - 명령줄 인자에서
+const getProjectId = (): string => {
+  // 명령줄 인자 확인
+  const args = process.argv.slice(2);
+  let projectId: string | undefined;
+
+  // 인자 처리
+  for (let i = 0; i < args.length; i++) {
+    // --project_id value 형식 처리
+    if (args[i] === "--project_id" && i + 1 < args.length) {
+      projectId = args[i + 1];
+      break;
+    }
+    // --project_id=value 형식 처리 (하위 호환성)
+    else if (args[i].startsWith("--project_id=")) {
+      projectId = args[i].split("=")[1];
+      break;
+    }
+  }
+
+  // 위치 인자 처리 (첫 번째 인자가 옵션이 아닌 경우)
+  if (!projectId && args.length > 0 && !args[0].startsWith("--")) {
+    projectId = args[0];
+  }
+
+  // 프로젝트 ID 검증
   if (!projectId) {
-    console.error("경고: PROJECT_ID 환경 변수가 설정되지 않았습니다.");
+    console.error("오류: 프로젝트 ID가 제공되지 않았습니다.");
+    console.error("사용법: bun index.ts --project_id <project_id>");
+    console.error("또는: bun index.ts --project_id=<project_id>");
+    console.error("또는: bun index.ts <project_id>");
     process.exit(1);
   }
+
   return projectId;
 };
 
 async function main() {
   // 프로젝트 ID 확인
   const projectId = getProjectId();
-  console.error("사용 중인 프로젝트 ID:", projectId);
+  console.error(`사용 중인 프로젝트 ID: ${projectId}`);
+
+  // 전역적으로 process.env에 설정하여 다른 모듈에서도 참조 가능하게 설정
+  process.env.PROJECT_ID = projectId;
 
   // Create server instance with capabilities
   const server = new Server(SERVER_CONFIG, {

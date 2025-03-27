@@ -1,11 +1,8 @@
 import { Tool } from "../types/tool";
-import { CodeChunkingService } from "../services/codeChunkingService";
 import { EmbeddingService } from "../services/embeddingService";
 import { db } from "../db";
 import { projects, codeChunks, type CodeChunk } from "../db/schema";
 import { eq } from "drizzle-orm";
-import * as path from "path";
-import * as fs from "fs/promises";
 import { CodeChunkRepository } from "../services/codeChunkRepository";
 import { CodeChunk as CodeChunkDto } from "../services/codeChunkingService";
 
@@ -18,9 +15,6 @@ const getProjectId = () => {
   return projectId;
 };
 
-export type GetChunkStatsArgs = {
-  // 빈 타입 - 프로젝트 ID는 환경 변수에서 가져옴
-};
 export type SearchChunksArgs = {
   query: string;
   limit?: number;
@@ -100,7 +94,7 @@ const searchChunksByKeyword: Tool<SearchProjectArgs> = {
 // 코드 청크 검색 도구
 const searchChunks: Tool<SearchChunksArgs> = {
   name: "search_code_chunks",
-  description: "코드 청크를 검색합니다",
+  description: "코드 청크를 임베딩 벡터를 사용하여 검색합니다",
   inputSchema: {
     type: "object",
     properties: {
@@ -175,81 +169,4 @@ const searchChunks: Tool<SearchChunksArgs> = {
   },
 };
 
-// 코드 청크 통계 도구
-const getChunkStats: Tool<GetChunkStatsArgs> = {
-  name: "mcp_code_getStats",
-  description: "프로젝트의 코드 청크 통계를 반환합니다",
-  inputSchema: {
-    type: "object",
-    properties: {},
-    required: [],
-  },
-  async execute() {
-    try {
-      const projectId = getProjectId();
-
-      const projectList = await db
-        .select()
-        .from(projects)
-        .where(eq(projects.id, projectId));
-
-      const project = projectList[0];
-      if (!project) {
-        throw new Error("프로젝트를 찾을 수 없습니다");
-      }
-
-      // 청크 통계 계산
-      const chunks = await db
-        .select()
-        .from(codeChunks)
-        .where(eq(codeChunks.projectId, projectId));
-
-      const uniqueFiles = new Set(chunks.map((chunk) => chunk.path)).size;
-      const chunkSizes = chunks.map(
-        (chunk) => chunk.lineEnd - chunk.lineStart + 1
-      );
-
-      const stats = {
-        totalChunks: chunks.length,
-        totalFiles: uniqueFiles,
-        averageChunkSize:
-          chunkSizes.length > 0
-            ? chunkSizes.reduce((sum, size) => sum + size, 0) /
-              chunkSizes.length
-            : 0,
-        largestChunk: chunkSizes.length > 0 ? Math.max(...chunkSizes) : 0,
-        smallestChunk: chunkSizes.length > 0 ? Math.min(...chunkSizes) : 0,
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `프로젝트 통계:\n` +
-              `- 총 청크 수: ${stats.totalChunks}\n` +
-              `- 총 파일 수: ${stats.totalFiles}\n` +
-              `- 평균 청크 크기: ${stats.averageChunkSize.toFixed(2)} 줄\n` +
-              `- 가장 큰 청크: ${stats.largestChunk} 줄\n` +
-              `- 가장 작은 청크: ${stats.smallestChunk} 줄`,
-          },
-        ],
-      };
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "알 수 없는 오류가 발생했습니다";
-      return {
-        content: [
-          {
-            type: "text",
-            text: `통계 조회 중 오류가 발생했습니다: ${errorMessage}`,
-          },
-        ],
-      };
-    }
-  },
-};
-
-export const codeTools = [searchChunksByKeyword, searchChunks, getChunkStats];
+export const codeTools = [searchChunksByKeyword, searchChunks];
