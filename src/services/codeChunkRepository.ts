@@ -239,11 +239,109 @@ export class CodeChunkRepository {
   }
 
   // 프로젝트 내 코드 청크 키워드 검색
-  async searchCodeChunks(projectId: string, query: string) {
-    // 간단한 텍스트 검색 (나중에 벡터 검색으로 대체)
-    return await this.db
-      .select()
-      .from(codeChunks)
-      .where(eq(codeChunks.projectId, projectId));
+  // 임베딩을 사용한 유사 코드 청크 검색
+  async searchSimilarCodeChunks(
+    projectId: string,
+    embedding: number[],
+    limit: number = 10
+  ): Promise<CodeChunkDto[]> {
+    try {
+      console.log(
+        `프로젝트 ID ${projectId}의 유사 코드 청크 검색 중 (limit: ${limit})`
+      );
+
+      // pgvector의 <=> 연산자를 사용한 L2 거리 계산으로 유사도 검색
+      // 거리가 작을수록 유사도가 높음
+      const result = await this.db.execute(sql`
+        SELECT * FROM code_chunks
+        WHERE project_id = ${projectId}
+          AND embedding IS NOT NULL
+        ORDER BY embedding <=> ${JSON.stringify(embedding)}::float[]
+        LIMIT ${limit}
+      `);
+
+      // 데이터베이스 청크를 서비스 객체로 변환
+      const dbChunks = result as unknown as any[];
+      const chunks: CodeChunkDto[] = dbChunks.map((chunk) => ({
+        id: chunk.id,
+        projectId: chunk.project_id,
+        path: chunk.path,
+        code: chunk.code,
+        type: chunk.type,
+        name: chunk.name,
+        lineStart: chunk.line_start,
+        lineEnd: chunk.line_end,
+        dependencies: chunk.dependencies || [],
+        dependents: chunk.dependents || [],
+        // embedding은 생략
+      }));
+
+      console.log(`검색된 유사 코드 청크 수: ${chunks.length}`);
+      return chunks;
+    } catch (error) {
+      console.error(
+        `프로젝트 ID ${projectId}의 유사 코드 청크 검색 중 오류 발생:`,
+        error
+      );
+      throw error;
+    }
+  }
+
+  // 임베딩을 사용한 코드 청크 유사도 검색 (코사인 유사도 사용)
+  async searchCodeChunksByCosine(
+    projectId: string,
+    embedding: number[],
+    limit: number = 10,
+    threshold: number = 0.7 // 코사인 유사도 임계값 (0.7 이상만 반환)
+  ): Promise<CodeChunkDto[]> {
+    try {
+      console.log(
+        `프로젝트 ID ${projectId}의 코사인 유사도 기반 코드 청크 검색 중 (limit: ${limit})`
+      );
+
+      // pgvector의 <=> 연산자를 사용한 코사인 유사도 계산
+      const result = await this.db.execute(sql`
+        SELECT *, 1 - (embedding <=> ${JSON.stringify(
+          embedding
+        )}::float[]) as similarity
+        FROM code_chunks
+        WHERE project_id = ${projectId}
+          AND embedding IS NOT NULL
+        ORDER BY similarity DESC
+        LIMIT ${limit}
+      `);
+
+      // 임계값 이상의 유사도를 가진 청크만 필터링
+      const dbChunks = result as unknown as any[];
+      const filteredChunks = dbChunks.filter(
+        (chunk) => chunk.similarity >= threshold
+      );
+
+      // 데이터베이스 청크를 서비스 객체로 변환
+      const chunks: CodeChunkDto[] = filteredChunks.map((chunk) => ({
+        id: chunk.id,
+        projectId: chunk.project_id,
+        path: chunk.path,
+        code: chunk.code,
+        type: chunk.type,
+        name: chunk.name,
+        lineStart: chunk.line_start,
+        lineEnd: chunk.line_end,
+        dependencies: chunk.dependencies || [],
+        dependents: chunk.dependents || [],
+        similarity: chunk.similarity, // 유사도 점수 추가
+      }));
+
+      console.log(
+        `임계값(${threshold}) 이상의 유사 코드 청크 수: ${chunks.length}`
+      );
+      return chunks;
+    } catch (error) {
+      console.error(
+        `프로젝트 ID ${projectId}의 코사인 유사도 기반 코드 청크 검색 중 오류 발생:`,
+        error
+      );
+      throw error;
+    }
   }
 }
