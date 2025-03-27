@@ -24,77 +24,11 @@ export type SearchProjectArgs = {
   query: string;
 };
 
-// 프로젝트 검색 도구
-const searchChunksByKeyword: Tool<SearchProjectArgs> = {
-  name: "keyword_search",
-  description: "프로젝트 내 코드를 키워드로 검색합니다",
-  inputSchema: {
-    type: "object",
-    properties: {
-      query: {
-        type: "string",
-        description: "검색 키워드",
-      },
-    },
-    required: ["query"],
-  },
-  async execute(args) {
-    try {
-      const projectId = getProjectId();
-
-      const repository = new CodeChunkRepository();
-      const project = await repository.getProject(projectId);
-
-      if (!project) {
-        throw new Error("프로젝트를 찾을 수 없습니다");
-      }
-
-      // 벡터 검색 사용
-      const chunks = await repository.searchCodeChunks(projectId, args.query);
-
-      if (chunks.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `검색 결과가 없습니다: "${args.query}"`,
-            },
-          ],
-        };
-      }
-
-      const resultsText = chunks
-        .map(
-          (chunk: CodeChunkDto) =>
-            `## ${chunk.name} (${chunk.type})\n파일: ${chunk.path}\n라인: ${chunk.lineStart}-${chunk.lineEnd}\n\n\`\`\`\n${chunk.code}\n\`\`\``
-        )
-        .join("\n\n");
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `"${args.query}" 검색 결과 (${chunks.length}개):\n\n${resultsText}`,
-          },
-        ],
-      };
-    } catch (error: any) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `프로젝트 검색 중 오류가 발생했습니다: ${error.message}`,
-          },
-        ],
-      };
-    }
-  },
-};
-
 // 코드 청크 검색 도구
 const searchChunks: Tool<SearchChunksArgs> = {
   name: "search_code_chunks",
-  description: "코드 청크를 임베딩 벡터를 사용하여 검색합니다",
+  description:
+    "설정된 프로젝트 내에서 코드 청크를 임베딩 벡터를 사용하여 검색합니다",
   inputSchema: {
     type: "object",
     properties: {
@@ -169,4 +103,4 @@ const searchChunks: Tool<SearchChunksArgs> = {
   },
 };
 
-export const codeTools = [searchChunksByKeyword, searchChunks];
+export const codeTools = [searchChunks];

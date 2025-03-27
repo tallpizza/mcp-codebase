@@ -42,7 +42,6 @@ export class EmbeddingService {
       const validTexts = texts.filter((text) => text && text.length > 0);
 
       if (validTexts.length === 0) {
-        console.log("유효한 텍스트가 없습니다.");
         return [];
       }
 
@@ -53,18 +52,8 @@ export class EmbeddingService {
         batches.push(validTexts.slice(i, i + this.batchSize));
       }
 
-      console.log(
-        `${validTexts.length}개의 텍스트를 ${batches.length}개 배치로 처리합니다.`
-      );
-
       // 각 배치에 대해 병렬로 임베딩 요청 생성
       const batchPromises = batches.map(async (batch, index) => {
-        console.log(
-          `배치 ${index + 1}/${batches.length} 요청 시작... (${
-            batch.length
-          }개 항목)`
-        );
-
         const response = await this.openai.embeddings.create({
           model: "text-embedding-3-small",
           input: batch,
@@ -75,12 +64,6 @@ export class EmbeddingService {
           (item: { embedding: number[] }) => item.embedding
         );
 
-        console.log(
-          `배치 ${index + 1}/${batches.length} 완료. ${
-            batchEmbeddings.length
-          }개 임베딩 생성됨.`
-        );
-
         return batchEmbeddings;
       });
 
@@ -88,7 +71,6 @@ export class EmbeddingService {
       const embeddingsArrays = await Promise.all(batchPromises);
       const embeddings = embeddingsArrays.flat();
 
-      console.log(`총 ${embeddings.length}개 임베딩 병렬 처리 완료`);
       return embeddings;
     } catch (error) {
       console.error("배치 임베딩 생성 오류:", error);

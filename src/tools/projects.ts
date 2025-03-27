@@ -71,7 +71,6 @@ const createProject: Tool<CreateProjectArgs> = {
   },
   async execute(args) {
     try {
-      console.log(`프로젝트 생성 시작: ${args.name}`);
       const projectId = await repository.createProject(
         args.name,
         args.path,
@@ -166,8 +165,6 @@ const analyzeProject: Tool<AnalyzeProjectArgs> = {
       if (!project) {
         throw new Error("프로젝트를 찾을 수 없습니다");
       }
-
-      console.log(`프로젝트 분석 시작: ${project.name}`);
 
       // 프로젝트 코드베이스 청킹
       const chunkingService = new CodeChunkingService(project.path, project.id);
@@ -265,9 +262,4 @@ const createChunks: Tool<CreateChunksArgs> = {
   },
 };
 
-export const projectTools = [
-  createProject,
-  analyzeProject,
-  listProjects,
-  createChunks,
-];
+export const projectTools = [createChunks];

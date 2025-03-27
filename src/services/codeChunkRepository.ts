@@ -36,12 +36,8 @@ export class CodeChunkRepository {
   // DB 초기화 및 필요한 함수 생성
   async initializeDatabase(): Promise<void> {
     try {
-      console.log("데이터베이스 초기화 중...");
-
       // pgvector 확장 활성화 확인
       await this.db.execute(sql`CREATE EXTENSION IF NOT EXISTS vector;`);
-
-      console.log("pgvector 확장이 활성화되었습니다.");
     } catch (error) {
       console.error("데이터베이스 초기화 중 오류 발생:", error);
       throw error;
@@ -84,22 +80,14 @@ export class CodeChunkRepository {
   // 코드 청크 저장
   async saveCodeChunks(chunks: CodeChunkDto[]): Promise<void> {
     if (!chunks || chunks.length === 0) {
-      console.log("저장할 코드 청크가 없습니다");
       return;
     }
 
     try {
-      console.log(`${chunks.length}개의 코드 청크 저장 시작`);
-
       // 중복 청크 제거 (projectId + path + name 조합이 동일한 경우)
       const uniqueChunks = this.deduplicateChunks(chunks);
 
       if (chunks.length !== uniqueChunks.length) {
-        console.log(
-          `중복 제거: ${chunks.length}개 -> ${uniqueChunks.length}개 (${
-            chunks.length - uniqueChunks.length
-          }개 중복 제거됨)`
-        );
       }
 
       // 코드 청크 벌크 저장을 위한 값 변환
@@ -134,8 +122,6 @@ export class CodeChunkRepository {
           },
         })
         .returning();
-
-      console.log(`${insertedChunks.length}개의 코드 청크 저장 완료`);
     } catch (error) {
       console.error("코드 청크 저장 중 오류 발생:", error);
       throw error;
@@ -154,7 +140,6 @@ export class CodeChunkRepository {
       if (!uniqueMap.has(uniqueKey)) {
         uniqueMap.set(uniqueKey, chunk);
       } else {
-        console.log(`중복 청크 제거: ${uniqueKey}`);
       }
     }
 
@@ -164,8 +149,6 @@ export class CodeChunkRepository {
   // 프로젝트 ID로 코드 청크 조회
   async getCodeChunksByProjectId(projectId: string): Promise<CodeChunkDto[]> {
     try {
-      console.log(`프로젝트 ID ${projectId}의 코드 청크 조회 중`);
-
       const dbChunks = await this.db
         .select()
         .from(codeChunks)
@@ -185,7 +168,6 @@ export class CodeChunkRepository {
         dependents: chunk.dependents || [],
       }));
 
-      console.log(`조회된 코드 청크 수: ${chunks.length}`);
       return chunks;
     } catch (error) {
       console.error(
@@ -220,8 +202,6 @@ export class CodeChunkRepository {
     type: "function" | "class" | "type"
   ): Promise<CodeChunkDto[]> {
     try {
-      console.log(`프로젝트 ID ${projectId}의 ${type} 유형 코드 청크 조회 중`);
-
       const dbChunks = await this.db
         .select()
         .from(codeChunks)
@@ -243,7 +223,6 @@ export class CodeChunkRepository {
         dependents: chunk.dependents || [],
       }));
 
-      console.log(`조회된 ${type} 유형 코드 청크 수: ${chunks.length}`);
       return chunks;
     } catch (error) {
       console.error(
@@ -272,10 +251,6 @@ export class CodeChunkRepository {
     threshold: number = 0.7 // 코사인 유사도 임계값 (0.7 이상만 반환)
   ): Promise<CodeChunkDto[]> {
     try {
-      console.log(
-        `프로젝트 ID ${projectId}의 코사인 유사도 기반 코드 청크 검색 중 (limit: ${limit})`
-      );
-
       // 코사인 유사도 계산
       const similarity = sql<number>`1 - (${cosineDistance(
         codeChunks.embedding,
@@ -323,9 +298,6 @@ export class CodeChunkRepository {
         similarity: chunk.similarity,
       }));
 
-      console.log(
-        `임계값(${threshold}) 이상의 유사 코드 청크 수: ${chunks.length}`
-      );
       return chunks;
     } catch (error) {
       console.error(

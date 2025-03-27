@@ -4,9 +4,9 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { projectTools } from "./tools/projects";
-import { fileTools } from "./tools/files";
-import { codeTools } from "./tools/code";
+import { projectTools } from "./tools/projects.js";
+import { fileTools } from "./tools/files.js";
+import { codeTools } from "./tools/code.js";
 
 // 서버 설정
 const SERVER_CONFIG = {

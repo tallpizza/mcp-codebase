@@ -1,6 +1,6 @@
-import { Tool } from "../types/tool";
-import { db } from "../db";
-import { projects } from "../db/schema";
+import { Tool } from "../types/tool.js";
+import { db } from "../db/index.js";
+import { projects } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import * as path from "path";
 import * as fs from "fs/promises";

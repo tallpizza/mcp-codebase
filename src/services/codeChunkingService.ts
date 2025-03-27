@@ -43,7 +43,6 @@ export class CodeChunkingService {
     );
 
     if (!tsconfigPath) {
-      console.log("tsconfig.json을 찾을 수 없습니다. 기본 설정을 사용합니다.");
       // 기본 컴파일러 옵션 설정
       const compilerOptions: ts.CompilerOptions = {
         target: ts.ScriptTarget.ES2020,
@@ -183,7 +182,6 @@ export class CodeChunkingService {
 
     const sourceFile = this.program.getSourceFile(filePath);
     if (!sourceFile) {
-      console.log(`파일을 찾을 수 없음: ${filePath}`);
       return [];
     }
 
@@ -268,14 +266,10 @@ export class CodeChunkingService {
       ? directoryPath
       : path.join(this.projectRoot, directoryPath);
 
-    console.log(`디렉토리 청킹 시작: ${absolutePath}`);
-
     // 해당 디렉토리 내의 모든 TS/JS 파일 찾기
     const tsFiles = await this.findTsFilesInDirectory(absolutePath);
-    console.log(`디렉토리 청킹: 총 ${tsFiles.length} 파일 처리 예정`);
 
     if (tsFiles.length === 0) {
-      console.log("처리할 파일이 없습니다.");
       return [];
     }
 
@@ -286,14 +280,11 @@ export class CodeChunkingService {
     // 파일별 처리를 Promise 배열로 변환하여 병렬 처리
     const chunkPromises = tsFiles.map(async (file) => {
       try {
-        console.log(`처리 중: ${file}`);
         const fileChunks = await this.extractCodeChunksFromFile(file);
 
         processedFiles++;
         if (fileChunks.length > 0) {
-          console.log(`성공: ${file} - ${fileChunks.length}개 청크 추출`);
         } else {
-          console.log(`주의: ${file} - 추출된 청크 없음`);
         }
 
         return fileChunks;
@@ -310,10 +301,6 @@ export class CodeChunkingService {
     // 모든 청크 결과 병합
     let allChunks: CodeChunk[] = chunksArrays.flat();
 
-    console.log(
-      `디렉토리 청킹 완료: 총 ${tsFiles.length}개 파일 중 ${processedFiles}개 성공, ${failedFiles}개 실패, ${allChunks.length}개 코드 청크 추출`
-    );
-
     // 코드 청크에 대한 임베딩 배치 생성
     if (allChunks.length > 0) {
       await this.generateEmbeddingsForChunks(allChunks);
@@ -327,8 +314,6 @@ export class CodeChunkingService {
     chunks: CodeChunk[]
   ): Promise<void> {
     try {
-      console.log(`${chunks.length}개 코드 청크에 대한 임베딩 생성 시작`);
-
       // 전처리된 코드 준비
       const preprocessedCodes = chunks.map((chunk) =>
         this.embeddingService.preprocessCodeForEmbedding(chunk.code, chunk.path)
@@ -343,8 +328,6 @@ export class CodeChunkingService {
       for (let i = 0; i < chunks.length; i++) {
         chunks[i].embedding = embeddings[i];
       }
-
-      console.log(`${chunks.length}개 코드 청크의 임베딩 생성 완료`);
     } catch (error) {
       console.error("코드 청크 임베딩 생성 중 오류:", error);
       throw error;
@@ -356,7 +339,6 @@ export class CodeChunkingService {
     directoryPath: string
   ): Promise<string[]> {
     const result: string[] = [];
-    console.log(`디렉토리: ${directoryPath}에서 파일 검색 시작`);
 
     const findTsFiles = async (dir: string) => {
       try {
@@ -391,7 +373,6 @@ export class CodeChunkingService {
     };
 
     await findTsFiles(directoryPath);
-    console.log(`찾은 TS/JS 파일 수: ${result.length}`);
     return result;
   }
 
@@ -401,9 +382,7 @@ export class CodeChunkingService {
       ? filePath
       : path.join(this.projectRoot, filePath);
 
-    console.log(`파일 청킹 시작: ${absolutePath}`);
     const chunks = await this.extractCodeChunksFromFile(absolutePath);
-    console.log(`파일 청킹 완료: ${chunks.length}개 코드 청크 추출`);
 
     // 코드 청크에 대한 임베딩 배치 생성
     if (chunks.length > 0) {
@@ -415,8 +394,6 @@ export class CodeChunkingService {
 
   // 청크 의존성 처리
   private processChunkDependencies(chunks: CodeChunk[]): void {
-    console.log("코드 청크 의존성 후처리 시작");
-
     // 이름 -> 청크 맵 생성
     const nameToChunkMap = new Map<string, CodeChunk>();
     for (const chunk of chunks) {
@@ -441,14 +418,10 @@ export class CodeChunkingService {
 
       chunk.dependencies = resolvedDeps;
     }
-
-    console.log("코드 청크 의존성 처리 완료");
   }
 
   // 의존성 그래프 분석
   private analyzeChunkDependencyGraph(chunks: CodeChunk[]): void {
-    console.log("의존성 그래프 분석 시작");
-
     // 이름 -> 청크 맵 생성
     const nameToChunkMap = new Map<string, CodeChunk>();
     for (const chunk of chunks) {
@@ -477,9 +450,5 @@ export class CodeChunkingService {
       const allDeps = collectAllDeps(chunk.name);
       totalDependencies += allDeps.length;
     }
-
-    console.log(
-      `의존성 그래프 분석 완료: 총 ${totalDependencies}개 의존 관계 식별됨`
-    );
   }
 }

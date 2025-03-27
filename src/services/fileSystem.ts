@@ -1,12 +1,19 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as glob from "glob";
-import { FileInfo } from "../models/apiTypes";
 
 export interface FileSystemResult {
   success: boolean;
   error?: string;
   data?: any;
+}
+
+export interface FileInfo {
+  path: string;
+  name: string;
+  isDirectory: boolean;
+  size: number;
+  modifiedTime: string;
 }
 
 export class FileSystemService {
