@@ -1,0 +1,34 @@
+{
+  "name": "mcp-codebase",
+  "bin": {
+    "mcp-codebase": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod 755 build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "dependencies": {
+    "@types/glob": "^8.1.0",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.41.0",
+    "glob": "^11.0.1",
+    "hono": "^4.7.5",
+    "openai": "^4.89.0",
+    "pg": "^8.14.1",
+    "pgvector": "^0.2.0",
+    "typescript": "^5.4.2",
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "uuid": "^11.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pg": "^8.11.11",
+    "@types/typescript": "^2.0.0",
+    "@types/uuid": "^10.0.0",
+    "drizzle-kit": "^0.30.5",
+    "tsx": "^4.19.3"
+  }
+}

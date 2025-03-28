@@ -1,0 +1,1 @@
+npx @modelcontextprotocol/inspector -e PROJECT_ID=dd96d611-ecea-45ba-8746-759a9182a3db bun src/index.ts
