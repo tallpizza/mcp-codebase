@@ -110,6 +110,28 @@ export class CodeChunkRepository {
     }
   }
 
+  // 프로젝트 삭제
+  async deleteProject(projectId: string): Promise<boolean> {
+    try {
+      // 먼저 관련된 코드 청크 삭제
+      await this.db
+        .delete(codeChunks)
+        .where(eq(codeChunks.projectId, projectId));
+
+      // 그 다음 프로젝트 삭제
+      const result = await this.db
+        .delete(projects)
+        .where(eq(projects.id, projectId))
+        .returning();
+
+      // 삭제된 프로젝트가 있으면 true 반환
+      return result.length > 0;
+    } catch (error) {
+      console.error(`프로젝트 삭제 중 오류 발생: ${projectId}`, error);
+      throw error;
+    }
+  }
+
   // 코드 청크 저장
   async saveCodeChunks(chunks: CodeChunkDto[]): Promise<void> {
     if (!chunks || chunks.length === 0) {
@@ -378,5 +400,14 @@ export class CodeChunkRepository {
       );
       throw error;
     }
+  }
+
+  /**
+   * 프로젝트의 코드 청크 수를 가져옵니다.
+   * @param projectId 프로젝트 ID
+   * @returns 청크 수
+   */
+  public async getProjectChunkCount(projectId: string): Promise<number> {
+    return await this.getCodeChunksCountByProjectId(projectId);
   }
 }

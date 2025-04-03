@@ -1,6 +1,9 @@
 import { Tool } from "../types/tool";
 import { projects } from "../db/schema";
 import { CodeChunkRepository } from "../services/codeChunkRepository";
+import { ProjectService } from "../services/projectService";
+import { GitService } from "../services/gitService";
+import * as path from "path";
 
 // CLI 명령어 타입 정의
 export type CliCommand = {
@@ -199,13 +202,15 @@ export function generateUsage(
   return usage;
 }
 
-// 저장소 인스턴스
+// 서비스 인스턴스
 const repository = CodeChunkRepository.getInstance();
+const projectService = ProjectService.getInstance();
+const gitService = GitService.getInstance();
 
 // 프로젝트 생성 명령어
 export const createProjectCommand: CliCommand = {
   name: "create-project",
-  description: "새로운 프로젝트를 생성합니다",
+  description: "새로운 프로젝트를 생성합니다 (Git 저장소만 지원)",
   async execute(args: string[]) {
     // 인자 파싱 옵션
     const options: ParseOptions = {
@@ -214,14 +219,14 @@ export const createProjectCommand: CliCommand = {
       flags: [],
       namedArgs: ["path", "name", "description"],
       descriptions: {
-        path: "프로젝트 루트 디렉토리 경로 (절대 경로 또는 상대 경로)",
+        path: "프로젝트 루트 디렉토리 경로 (절대 경로 또는 상대 경로, Git 저장소여야 함)",
         name: "프로젝트 이름 (생략 시 경로의 마지막 디렉토리 이름으로 자동 설정)",
         description: "프로젝트에 대한 간단한 설명",
       },
       examples: [
-        "bun src/index.ts create-project --path /path/to/project",
-        'bun src/index.ts create-project --path /path/to/project --name "My Project"',
-        'bun src/index.ts create-project --path ./my-project --name "My Project" --description "A sample project"',
+        "bun src/index.ts create-project --path /path/to/git/project",
+        'bun src/index.ts create-project --path /path/to/git/project --name "My Project"',
+        'bun src/index.ts create-project --path ./my-git-project --name "My Project" --description "A sample Git project"',
       ],
     };
 
@@ -237,39 +242,159 @@ export const createProjectCommand: CliCommand = {
     }
 
     // 프로젝트 경로는 필수
-    const path = parsedArgs.named.path;
+    const projectPath = parsedArgs.named.path;
 
     // 프로젝트 이름이 제공되지 않은 경우 경로에서 유추 (마지막 디렉토리 이름)
     let name = parsedArgs.named.name;
     if (!name) {
       // 경로의 끝에 있는 슬래시 제거
-      const cleanPath = path.endsWith("/") ? path.slice(0, -1) : path;
+      const cleanPath = projectPath.endsWith("/")
+        ? projectPath.slice(0, -1)
+        : projectPath;
       // 마지막 디렉토리 이름 추출
       name = cleanPath.split("/").pop() || "unnamed-project";
     }
 
-    // 선택적 설명
+    // 설명 (선택 사항)
     const description = parsedArgs.named.description;
 
     try {
-      // 프로젝트 생성
-      const projectId = await repository.createProject(name, path, description);
+      console.log(`프로젝트 생성 중: ${name} (경로: ${projectPath})`);
 
-      console.log("프로젝트가 성공적으로 생성되었습니다.");
-      console.log(`프로젝트 ID: ${projectId}`);
-      console.log(`프로젝트 이름: ${name}`);
-      console.log(`프로젝트 경로: ${path}`);
+      // 프로젝트 서비스를 통해 생성
+      const projectId = await projectService.createProject({
+        name,
+        path: projectPath,
+        description,
+      });
+
+      console.log("프로젝트가 성공적으로 생성되었습니다!");
+      console.log(`- 프로젝트 ID: ${projectId}`);
+      console.log(`- 이름: ${name}`);
+      console.log(`- 경로: ${path.resolve(projectPath)}`);
       if (description) {
-        console.log(`프로젝트 설명: ${description}`);
+        console.log(`- 설명: ${description}`);
       }
-      console.log("\n다음 명령어로 프로젝트 분석을 시작할 수 있습니다:");
-      console.log(`bun src/index.ts --project_id=${projectId} --refresh`);
 
-      // 환경 변수에 프로젝트 ID 설정
+      console.log(
+        "\n다음 명령으로 MCP 서버 실행 시 이 프로젝트를 사용할 수 있습니다:"
+      );
+      console.log(`PROJECT_ID=${projectId} bun src/index.ts`);
+
+      console.log("\n또는 다음 명령으로 프로젝트 분석을 실행할 수 있습니다:");
+      console.log(`bun src/index.ts analyze-project --project_id ${projectId}`);
+    } catch (error: any) {
+      console.error(`오류: ${error.message}`);
+
+      // Git 저장소 관련 오류인 경우 도움말 표시
+      if (error.message.includes("Git 저장소가 아닙니다")) {
+        console.error("\n지정한 경로는 Git 저장소가 아닙니다.");
+        console.error(
+          "프로젝트 생성을 위해서는 유효한 Git 저장소가 필요합니다."
+        );
+        console.error("다음 명령으로 새 Git 저장소를 초기화할 수 있습니다:");
+        console.error(
+          `  cd ${projectPath} && git init && git add . && git commit -m "Initial commit"`
+        );
+      }
+
+      process.exit(1);
+    }
+  },
+};
+
+// 프로젝트 분석 명령어
+export const analyzeProjectCommand: CliCommand = {
+  name: "analyze-project",
+  description: "프로젝트의 코드를 분석하고 임베딩을 생성합니다",
+  async execute(args: string[]) {
+    // 인자 파싱 옵션
+    const options: ParseOptions = {
+      requiredArgs: ["project_id"],
+      optionalArgs: [],
+      flags: ["refresh"],
+      namedArgs: ["project_id"],
+      descriptions: {
+        project_id: "분석할 프로젝트의 ID",
+        refresh: "전체 프로젝트를 강제로 재분석 (Git 변경사항 감지 무시)",
+      },
+      examples: [
+        "bun src/index.ts analyze-project --project_id <project_id>",
+        "bun src/index.ts analyze-project --project_id <project_id> --refresh",
+      ],
+    };
+
+    // 인자 파싱
+    const parsedArgs = parseArgs(args, options);
+
+    // 필수 인자 검증
+    const validationError = validateArgs(parsedArgs, options);
+    if (validationError) {
+      console.error(`오류: ${validationError}`);
+      console.error(generateUsage(this.name, this.description, options));
+      process.exit(1);
+    }
+
+    const projectId = parsedArgs.named.project_id;
+    const refresh = parsedArgs.flags.refresh;
+
+    try {
+      // 환경변수에 프로젝트 ID 설정 (도구에서 사용하기 위함)
       process.env.PROJECT_ID = projectId;
-    } catch (error) {
-      console.error("프로젝트 생성 중 오류가 발생했습니다:");
-      console.error(error);
+
+      console.log(
+        `프로젝트 분석 시작: ${projectId}${refresh ? " (강제 재분석)" : ""}`
+      );
+
+      // 프로젝트 존재 여부 확인
+      const project = await projectService.getProject(projectId);
+      if (!project) {
+        console.error(`오류: 프로젝트를 찾을 수 없습니다 (ID: ${projectId})`);
+        process.exit(1);
+      }
+
+      console.log(`분석 중인 프로젝트: ${project.name} (${project.path})`);
+      console.log(
+        "분석 진행 중... 이 작업은 프로젝트 크기에 따라 수 분이 걸릴 수 있습니다."
+      );
+
+      // 프로젝트 분석 실행
+      const result = await projectService.analyzeProject(projectId, refresh);
+
+      console.log("\n분석이 완료되었습니다!");
+      console.log(`- 프로젝트 ID: ${result.projectId}`);
+      console.log(`- 분석된 파일 수: ${result.analyzedFiles}`);
+      console.log(`- 생성된 코드 청크 수: ${result.totalChunks}`);
+
+      if (result.currentCommitHash) {
+        console.log(`- 현재 Git 커밋 해시: ${result.currentCommitHash}`);
+      }
+
+      if (result.changedFiles && result.changedFiles.length > 0) {
+        console.log(
+          `\n마지막 분석 이후 ${result.changedFiles.length}개 파일이 변경되었습니다.`
+        );
+
+        // 처음 5개 파일만 표시
+        const maxFilesToShow = 5;
+        const limitedFiles = result.changedFiles.slice(0, maxFilesToShow);
+        const remainingCount = result.changedFiles.length - maxFilesToShow;
+
+        limitedFiles.forEach((file) => {
+          console.log(`- ${file}`);
+        });
+
+        if (remainingCount > 0) {
+          console.log(`...외 ${remainingCount}개 파일`);
+        }
+      }
+
+      console.log(
+        "\nMCP 서버를 사용하여 프로젝트 코드를 검색하려면 다음 명령을 실행하세요:"
+      );
+      console.log(`PROJECT_ID=${projectId} bun src/index.ts`);
+    } catch (error: any) {
+      console.error(`프로젝트 분석 중 오류가 발생했습니다: ${error.message}`);
       process.exit(1);
     }
   },
@@ -280,28 +405,13 @@ export const listProjectsCommand: CliCommand = {
   name: "list-projects",
   description: "저장된 프로젝트 목록을 조회합니다",
   async execute(args: string[]) {
-    // 인자 파싱 옵션
-    const options: ParseOptions = {
-      flags: [],
-      examples: ["bun src/index.ts list-projects"],
-    };
-
-    // 인자 파싱
-    const parsedArgs = parseArgs(args, options);
-
     try {
-      // 프로젝트 목록 조회
-      const projects = await repository.getProjects();
+      const projects = await projectService.listProjects();
 
-      if (projects.length === 0) {
-        console.log("저장된 프로젝트가 없습니다.");
-        return;
-      }
+      console.log("프로젝트 목록:\n");
 
-      console.log("프로젝트 목록:");
-
-      for (const project of projects) {
-        console.log(`\nID: ${project.id}`);
+      projects.forEach((project) => {
+        console.log(`ID: ${project.id}`);
         console.log(`이름: ${project.name}`);
         console.log(`경로: ${project.path}`);
         if (project.description) {
@@ -310,46 +420,124 @@ export const listProjectsCommand: CliCommand = {
         if (project.lastCommitHash) {
           console.log(`마지막 분석 커밋: ${project.lastCommitHash}`);
         }
-      }
+        console.log("");
+      });
 
-      console.log("\n프로젝트 ID를 사용하여 MCP 서버 실행:");
-      console.log("bun src/index.ts --project_id=<project_id>");
-
-      console.log("\n프로젝트 분석 실행:");
-      console.log("bun src/index.ts --project_id=<project_id> --refresh");
+      // 사용 안내 메시지 업데이트
+      console.log("프로젝트 ID를 사용하여 MCP 서버 실행:");
+      console.log("PROJECT_ID=<project_id> bun src/index.ts");
+      console.log("");
+      console.log("프로젝트 분석 실행:");
+      console.log("PROJECT_ID=<project_id> bun src/index.ts --refresh");
+      console.log("또는");
+      console.log("bun src/index.ts analyze-project --project_id=<project_id>");
     } catch (error) {
-      console.error("프로젝트 목록 조회 중 오류가 발생했습니다:");
-      console.error(error);
+      console.error("프로젝트 목록 조회 중 오류 발생:", error);
       process.exit(1);
     }
   },
 };
 
-// 사용 가능한 명령어 목록
-export const commands: CliCommand[] = [
-  createProjectCommand,
-  listProjectsCommand,
-];
+// delete-project 명령어 - 프로젝트 삭제
+export const deleteProjectCommand: CliCommand = {
+  name: "delete-project",
+  description: "프로젝트와 관련된 모든 코드 청크를 삭제합니다",
+  async execute(args: string[]) {
+    // 인자 파싱 옵션
+    const options: ParseOptions = {
+      requiredArgs: ["project_id"],
+      namedArgs: ["project_id"],
+      flags: ["force"],
+      descriptions: {
+        project_id: "삭제할 프로젝트 ID",
+        force: "확인 없이 강제로 삭제",
+      },
+      examples: [
+        "bun src/index.ts delete-project --project_id <project_id>",
+        "bun src/index.ts delete-project --project_id <project_id> --force",
+      ],
+    };
+
+    // 인자 파싱
+    const parsedArgs = parseArgs(args, options);
+
+    // 필수 인자 검증
+    const validationError = validateArgs(parsedArgs, options);
+    if (validationError) {
+      console.error(`오류: ${validationError}`);
+      console.error(generateUsage(this.name, this.description, options));
+      process.exit(1);
+    }
+
+    const projectId = parsedArgs.named.project_id;
+    const force = parsedArgs.flags.force;
+
+    try {
+      // 프로젝트 정보 조회
+      const projectService = ProjectService.getInstance();
+      const project = await projectService.getProject(projectId);
+
+      if (!project) {
+        console.error(`오류: 프로젝트를 찾을 수 없습니다: ${projectId}`);
+        process.exit(1);
+      }
+
+      // 강제 삭제가 아니면 확인 요청
+      if (!force) {
+        console.log(`다음 프로젝트를 삭제하시겠습니까?`);
+        console.log(`- ID: ${project.id}`);
+        console.log(`- 이름: ${project.name}`);
+        console.log(`- 경로: ${project.path}`);
+        if (project.description) {
+          console.log(`- 설명: ${project.description}`);
+        }
+        console.log(
+          `\n이 작업은 되돌릴 수 없으며, 모든 코드 청크가 삭제됩니다.`
+        );
+        console.log(`계속하려면 프로젝트 ID를 다시 입력하세요: `);
+
+        // 사용자 입력 (이 부분은 실제로는 readline 모듈을 사용하여 구현해야 하지만
+        // 여기서는 force 옵션을 사용하도록 안내)
+        console.log(`\n확인 없이 삭제하려면 --force 플래그를 사용하세요.`);
+        process.exit(0);
+      }
+
+      // 프로젝트 삭제 실행
+      console.log(`프로젝트 삭제 중: ${project.name} (${projectId})`);
+      const result = await projectService.deleteProject(projectId);
+
+      if (result) {
+        console.log(`프로젝트가 성공적으로 삭제되었습니다!`);
+      } else {
+        console.error(`프로젝트 삭제에 실패했습니다.`);
+        process.exit(1);
+      }
+    } catch (error) {
+      console.error(`프로젝트 삭제 중 오류가 발생했습니다:`, error);
+      process.exit(1);
+    }
+  },
+};
 
 // 도움말 표시 함수
 export function showHelp() {
-  console.log("MCP Codebase CLI");
+  console.log("MCP 코드베이스 CLI");
   console.log("\n사용 가능한 명령어:");
-
-  for (const command of commands) {
-    console.log(`\n  ${command.name}`);
-    console.log(`    ${command.description}`);
-  }
-
-  console.log("\n자세한 명령어 사용법은 다음과 같이 확인할 수 있습니다:");
+  console.log("  create-project    새로운 프로젝트 생성");
+  console.log("  list-projects     저장된 프로젝트 목록 조회");
+  console.log("  analyze-project   프로젝트 분석 및 임베딩 생성");
+  console.log("  delete-project    프로젝트와 관련된 모든 코드 청크를 삭제");
+  console.log("\n자세한 도움말은 다음과 같이 입력하세요:");
   console.log("  bun src/index.ts <명령어> --help");
-
-  console.log("\n기존 MCP 사용법:");
-  console.log("  MCP 서버 모드: bun src/index.ts --project_id <project_id>");
-  console.log(
-    "  새로고침 모드: bun src/index.ts --project_id <project_id> --refresh"
-  );
 }
+
+// 사용 가능한 모든 명령어 목록
+export const commands: CliCommand[] = [
+  createProjectCommand,
+  listProjectsCommand,
+  analyzeProjectCommand,
+  deleteProjectCommand,
+];
 
 // 명령어 실행 함수
 export async function executeCommand(commandName: string, args: string[]) {
@@ -357,42 +545,21 @@ export async function executeCommand(commandName: string, args: string[]) {
   if (args.includes("--help")) {
     const command = commands.find((cmd) => cmd.name === commandName);
     if (command) {
-      // 명령어별 옵션 정의
-      let options: ParseOptions = {};
-
-      if (command.name === "create-project") {
-        options = {
-          requiredArgs: ["path"],
-          optionalArgs: ["name", "description"],
-          namedArgs: ["path", "name", "description"],
-          descriptions: {
-            path: "프로젝트 루트 디렉토리 경로 (절대 경로 또는 상대 경로)",
-            name: "프로젝트 이름 (생략 시 경로의 마지막 디렉토리 이름으로 자동 설정)",
-            description: "프로젝트에 대한 간단한 설명",
-          },
-          examples: [
-            "bun src/index.ts create-project --path /path/to/project",
-            'bun src/index.ts create-project --path /path/to/project --name "My Project"',
-            'bun src/index.ts create-project --path ./my-project --name "My Project" --description "A sample project"',
-          ],
-        };
-      } else if (command.name === "list-projects") {
-        options = {
-          examples: ["bun src/index.ts list-projects"],
-        };
-      }
-
-      console.log(generateUsage(command.name, command.description, options));
-    } else {
-      showHelp();
+      // 각 명령어의 도움말 표시
+      console.log(
+        generateUsage(command.name, command.description, {
+          // 기본 옵션으로 도움말 생성
+          // 실제 구현은 각 명령어의 execute 함수에서 자세한 옵션 제공
+        })
+      );
+      return;
     }
-    return;
   }
 
   // 명령어 찾기
   const command = commands.find((cmd) => cmd.name === commandName);
   if (!command) {
-    console.error(`오류: 알 수 없는 명령어 '${commandName}'`);
+    console.error(`알 수 없는 명령어: ${commandName}`);
     showHelp();
     process.exit(1);
   }
