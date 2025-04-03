@@ -15,6 +15,7 @@ export const projects = pgTable("projects", {
   name: text("name").notNull(),
   path: text("path").notNull(),
   description: text("description"),
+  lastCommitHash: text("last_commit_hash"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

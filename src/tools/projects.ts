@@ -1,6 +1,7 @@
 import { Tool } from "../types/tool";
 import { CodeChunkingService } from "../services/codeChunkingService";
 import { CodeChunkRepository } from "../services/codeChunkRepository";
+import { GitService } from "../services/gitService";
 import * as path from "path";
 import "dotenv/config";
 import { projects } from "../db/schema";
@@ -8,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db";
 
 const repository = CodeChunkRepository.getInstance();
+const gitService = GitService.getInstance();
 
 // 환경 변수에서 프로젝트 ID 가져오기
 const getProjectId = () => {
@@ -76,6 +78,15 @@ const createProject: Tool<CreateProjectArgs> = {
       // 프로젝트 ID 설정 안내
       await setProjectId(projectId);
 
+      // Git 저장소인 경우 현재 커밋 해시 저장
+      if (gitService.isGitRepository(args.path)) {
+        const commitHash = gitService.getCurrentCommitHash(args.path);
+        if (commitHash) {
+          await repository.updateProjectCommitHash(projectId, commitHash);
+          console.error(`Git 커밋 해시 저장됨: ${commitHash}`);
+        }
+      }
+
       return {
         content: [
           {
@@ -116,7 +127,9 @@ const listProjects: Tool<ListProjectsArgs> = {
           (p) =>
             `${p.id === currentProjectId ? "* " : ""}${p.name} (${
               p.id
-            })\n   경로: ${p.path}\n   설명: ${p.description || "없음"}`
+            })\n   경로: ${p.path}\n   설명: ${
+              p.description || "없음"
+            }\n   마지막 분석 커밋: ${p.lastCommitHash || "없음"}`
         )
         .join("\n\n");
 
@@ -162,19 +175,86 @@ export const analyzeProject: Tool<AnalyzeProjectArgs> = {
         throw new Error("프로젝트를 찾을 수 없습니다");
       }
 
+      // Git 저장소 체크 및 변경사항 확인
+      let filesToAnalyze: string[] | null = null;
+      let changedFiles: string[] = [];
+      let currentCommitHash: string | null = null;
+
+      if (gitService.isGitRepository(project.path)) {
+        console.error("Git 저장소 감지됨, 변경사항 확인 중...");
+        const {
+          changedFiles: changed,
+          currentHash,
+          hasChanges,
+        } = await gitService.getProjectChangedFiles(projectId);
+
+        changedFiles = changed;
+        currentCommitHash = currentHash;
+
+        if (hasChanges) {
+          if (project.lastCommitHash) {
+            console.error(
+              `마지막 분석 이후 ${changedFiles.length}개 파일이 변경되었습니다.`
+            );
+            // 변경된 파일만 분석하도록 설정
+            filesToAnalyze = changedFiles;
+          } else {
+            console.error("첫 번째 분석입니다. 전체 프로젝트를 분석합니다.");
+          }
+        } else {
+          console.error("마지막 분석 이후 변경된 파일이 없습니다.");
+          // 변경된 파일이 없으면 새 파일만 추가
+          console.error("새 파일만 추가합니다...");
+        }
+      }
+
       // 프로젝트 코드베이스 청킹
       const chunkingService = new CodeChunkingService(project.path, project.id);
       await chunkingService.initialize();
-      const chunks = await chunkingService.chunkEntireProject();
+
+      // 특정 파일만 분석할지 전체 프로젝트를 분석할지 결정
+      let chunks;
+      if (filesToAnalyze) {
+        // 변경된 파일만 청킹
+        console.error("변경된 파일만 분석합니다...");
+        chunks = [];
+        for (const filePath of filesToAnalyze) {
+          const relativeFilePath = path.relative(project.path, filePath);
+          console.error(`파일 분석 중: ${relativeFilePath}`);
+          try {
+            const fileChunks = await chunkingService.chunkFile(filePath);
+            chunks.push(...fileChunks);
+          } catch (error) {
+            console.error(`파일 분석 중 오류 발생: ${filePath}`, error);
+            // 개별 파일 오류는 무시하고 계속 진행
+          }
+        }
+      } else {
+        // 전체 프로젝트 청킹
+        console.error("전체 프로젝트를 분석합니다...");
+        chunks = await chunkingService.chunkEntireProject();
+      }
 
       // 청크 저장
       await repository.saveCodeChunks(chunks);
+
+      // Git 커밋 해시 업데이트 (있는 경우)
+      if (currentCommitHash) {
+        await repository.updateProjectCommitHash(projectId, currentCommitHash);
+        console.error(`Git 커밋 해시 업데이트됨: ${currentCommitHash}`);
+      }
 
       return {
         content: [
           {
             type: "text",
-            text: `프로젝트 분석이 완료되었습니다.\n- 생성된 코드 청크: ${chunks.length}개`,
+            text: `프로젝트 분석이 완료되었습니다.\n- 생성된 코드 청크: ${
+              chunks.length
+            }개${
+              changedFiles.length > 0
+                ? `\n- 변경된 파일: ${changedFiles.length}개`
+                : ""
+            }${currentCommitHash ? `\n- 커밋 해시: ${currentCommitHash}` : ""}`,
           },
         ],
       };
@@ -200,7 +280,7 @@ const createChunks: Tool<CreateChunksArgs> = {
     properties: {
       filePath: {
         type: "string",
-        description: "파일 경로",
+        description: "분석할 파일 경로",
       },
     },
     required: ["filePath"],
@@ -209,48 +289,38 @@ const createChunks: Tool<CreateChunksArgs> = {
     try {
       const projectId = getProjectId();
 
-      const projectList = await db
-        .select()
-        .from(projects)
-        .where(eq(projects.id, projectId));
-
-      const project = projectList[0];
+      const project = await repository.getProject(projectId);
       if (!project) {
         throw new Error("프로젝트를 찾을 수 없습니다");
       }
 
-      const targetPath = path.join(project.path, args.filePath);
-      if (!targetPath.startsWith(project.path)) {
-        throw new Error("프로젝트 경로를 벗어난 접근입니다");
-      }
+      // 파일 경로 확인
+      const fullPath = path.isAbsolute(args.filePath)
+        ? args.filePath
+        : path.join(project.path, args.filePath);
 
-      const chunkingService = new CodeChunkingService(project.path, projectId);
+      // 청킹 서비스 초기화 및 파일 분석
+      const chunkingService = new CodeChunkingService(project.path, project.id);
       await chunkingService.initialize();
+      const chunks = await chunkingService.chunkFile(fullPath);
 
-      // 파일 처리 메서드 이름이 processFile이 아닌 경우 실제 메서드 이름으로 변경
-      const chunks = await chunkingService.chunkFile(targetPath);
-
-      // 청크를 DB에 삽입
+      // 청크 저장
       await repository.saveCodeChunks(chunks);
 
       return {
         content: [
           {
             type: "text",
-            text: `${chunks.length}개의 코드 청크가 생성되었습니다.`,
+            text: `파일 분석이 완료되었습니다.\n- 파일: ${args.filePath}\n- 생성된 코드 청크: ${chunks.length}개`,
           },
         ],
       };
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "알 수 없는 오류가 발생했습니다";
+    } catch (error: any) {
       return {
         content: [
           {
             type: "text",
-            text: `코드 청크 생성 중 오류가 발생했습니다: ${errorMessage}`,
+            text: `파일 분석 중 오류가 발생했습니다: ${error.message}`,
           },
         ],
       };
@@ -258,4 +328,5 @@ const createChunks: Tool<CreateChunksArgs> = {
   },
 };
 
+// 내보낼 도구 목록
 export const projectTools = [];

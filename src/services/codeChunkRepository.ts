@@ -88,6 +88,28 @@ export class CodeChunkRepository {
     return result[0] || null;
   }
 
+  // 프로젝트의 마지막 커밋 해시 업데이트
+  async updateProjectCommitHash(
+    projectId: string,
+    commitHash: string
+  ): Promise<void> {
+    try {
+      await this.db
+        .update(projects)
+        .set({
+          lastCommitHash: commitHash,
+          updatedAt: new Date(),
+        })
+        .where(eq(projects.id, projectId));
+    } catch (error) {
+      console.error(
+        `프로젝트 ${projectId}의 커밋 해시 업데이트 중 오류 발생:`,
+        error
+      );
+      throw error;
+    }
+  }
+
   // 코드 청크 저장
   async saveCodeChunks(chunks: CodeChunkDto[]): Promise<void> {
     if (!chunks || chunks.length === 0) {
