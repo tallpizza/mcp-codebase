@@ -38,10 +38,20 @@ bun src/index.ts delete-project --project_id <project_id> --force
 
 ### MCP 서버 모드
 
-```sh
-# 환경변수로 프로젝트 ID 전달
-PROJECT_ID=<project_id> bun src/index.ts
+프로젝트 내에서 build 후
 
-# 강제 재분석 모드로 실행
-PROJECT_ID=<project_id> bun src/index.ts --refresh
+```json
+{
+  "mcpServers": {
+    "Backend": {
+      "command": "node",
+      "args": ["{AbsolutePath}/build/index.ts"],
+      "env": {
+        "DATABASE_URL": "",
+        "OPENAI_API_KEY": "",
+        "PROJECT_ID": ""
+      }
+    }
+  }
+}
 ```
