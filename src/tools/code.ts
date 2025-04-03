@@ -52,7 +52,24 @@ const searchChunks: Tool<SearchChunksArgs> = {
   },
   async execute(args) {
     try {
+      // 인자 검증 로직 추가
+      if (!args || typeof args !== "object") {
+        throw new Error("유효하지 않은 인자 형식: 객체가 필요합니다");
+      }
+
+      if (!args.query || typeof args.query !== "string") {
+        throw new Error("유효한 검색어(query)가 필요합니다");
+      }
+
+      // 디버깅을 위한 로깅
+      console.error(
+        `코드 청크 검색 시작: 쿼리="${args.query}", 제한=${
+          args.limit || 10
+        }, 임계값=${args.threshold || 0.3}`
+      );
+
       const projectId = getProjectId();
+      console.error(`사용 중인 프로젝트 ID: ${projectId}`);
 
       const projectList = await db
         .select()
@@ -65,19 +82,25 @@ const searchChunks: Tool<SearchChunksArgs> = {
       }
 
       // 임베딩 생성
+      console.error(`임베딩 생성 시작: "${args.query}"`);
       const embeddingService = new EmbeddingService();
       const queryEmbedding = await embeddingService.generateEmbedding(
         args.query
       );
+      console.error(`임베딩 생성 완료: 차원 ${queryEmbedding.length}`);
 
-      // CodeChunkRepository를 사용한 벡터 검색
-      const repository = new CodeChunkRepository();
+      // CodeChunkRepository 싱글톤 인스턴스 사용
+      const repository = CodeChunkRepository.getInstance();
+
+      // 코드 청크 검색
+      console.error(`코드 청크 검색 시작: 프로젝트 ID=${projectId}`);
       const chunks = await repository.searchCodeChunksByCosine(
         projectId,
         queryEmbedding,
         args.limit || 10,
-        args.threshold || 0.3 // 유사도 임계값
+        args.threshold || 0.3
       );
+      console.error(`검색 결과: ${chunks.length}개 청크 발견`);
 
       // similarity 속성이 있음을 명시적으로 표현
       interface CodeChunkWithSimilarity extends CodeChunkDto {
@@ -93,6 +116,14 @@ const searchChunks: Tool<SearchChunksArgs> = {
         })),
       };
     } catch (error: unknown) {
+      // 자세한 오류 정보 로깅
+      const errorDetail =
+        error instanceof Error
+          ? `${error.message}\n${error.stack}`
+          : String(error);
+      console.error(`코드 청크 검색 오류: ${errorDetail}`);
+
+      // 사용자에게 표시할 메시지
       const errorMessage =
         error instanceof Error
           ? error.message
@@ -101,7 +132,7 @@ const searchChunks: Tool<SearchChunksArgs> = {
         content: [
           {
             type: "text",
-            text: `코드 청크 검색 중 오류가 발생했습니다: ${errorMessage}`,
+            text: `코드 청크 검색 중 오류가 발생했습니다: ${errorMessage} ${errorDetail}`,
           },
         ],
       };

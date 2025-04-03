@@ -18,14 +18,26 @@ import { count } from "drizzle-orm";
 
 // 코드 청크 저장소
 export class CodeChunkRepository {
+  private static instance: CodeChunkRepository | null = null; // 싱글톤 인스턴스
   private db: ReturnType<typeof drizzle>;
   private pool: Pool;
 
-  constructor() {
+  // 생성자를 private으로 변경
+  private constructor() {
     this.pool = new Pool({
       connectionString: process.env.DATABASE_URL,
     });
     this.db = drizzle(this.pool);
+    // 데이터베이스 초기화 (예: pgvector 확장 생성)는 별도 메서드로 호출 필요
+    // 예: this.initializeDatabase();
+  }
+
+  // 싱글톤 인스턴스 반환 메서드
+  public static getInstance(): CodeChunkRepository {
+    if (!CodeChunkRepository.instance) {
+      CodeChunkRepository.instance = new CodeChunkRepository();
+    }
+    return CodeChunkRepository.instance;
   }
 
   // 연결 종료
@@ -33,10 +45,9 @@ export class CodeChunkRepository {
     await this.pool.end();
   }
 
-  // DB 초기화 및 필요한 함수 생성
-  async initializeDatabase(): Promise<void> {
+  // DB 초기화 메서드 (외부에서 호출 가능하도록 public으로)
+  public async initializeDatabase(): Promise<void> {
     try {
-      // pgvector 확장 활성화 확인
       await this.db.execute(sql`CREATE EXTENSION IF NOT EXISTS vector;`);
     } catch (error) {
       console.error("데이터베이스 초기화 중 오류 발생:", error);

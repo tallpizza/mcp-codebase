@@ -16,16 +16,55 @@ export class EmbeddingService {
    */
   async generateEmbedding(text: string): Promise<number[]> {
     try {
+      // 입력 유효성 검사
+      if (!text || typeof text !== "string") {
+        throw new Error("유효한 텍스트가 필요합니다");
+      }
+
+      if (text.trim() === "") {
+        throw new Error("비어있지 않은 텍스트가 필요합니다");
+      }
+
+      // 로깅
+      console.error(`임베딩 생성 요청: 텍스트 길이=${text.length}`);
+
+      // API 키 확인
+      if (!this.openai || !process.env.OPENAI_API_KEY) {
+        throw new Error("OpenAI API 키가 설정되지 않았습니다");
+      }
+
       const response = await this.openai.embeddings.create({
         model: "text-embedding-3-small",
         input: text,
         encoding_format: "float",
       });
 
+      if (
+        !response ||
+        !response.data ||
+        !response.data[0] ||
+        !response.data[0].embedding
+      ) {
+        throw new Error("OpenAI API에서 유효한 임베딩 응답을 받지 못했습니다");
+      }
+
+      // 로깅
+      console.error(
+        `임베딩 생성 성공: 차원=${response.data[0].embedding.length}`
+      );
       return response.data[0].embedding;
     } catch (error) {
+      // 자세한 오류 로깅
       console.error("임베딩 생성 오류:", error);
-      throw error;
+      if (error instanceof Error) {
+        console.error("오류 스택:", error.stack);
+      }
+      // 오류 재전파
+      throw new Error(
+        `임베딩 생성 실패: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 

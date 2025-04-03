@@ -1,17 +1,13 @@
 import { Tool } from "../types/tool";
 import { CodeChunkingService } from "../services/codeChunkingService";
-import { EmbeddingService } from "../services/embeddingService";
 import { CodeChunkRepository } from "../services/codeChunkRepository";
-import { CodeChunk as CodeChunkDto } from "../services/codeChunkingService";
 import * as path from "path";
-import * as fs from "fs/promises";
 import "dotenv/config";
-import { codeChunks } from "../db/schema";
 import { projects } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 
-const repository = new CodeChunkRepository();
+const repository = CodeChunkRepository.getInstance();
 
 // 환경 변수에서 프로젝트 ID 가져오기
 const getProjectId = () => {
@@ -148,7 +144,7 @@ const listProjects: Tool<ListProjectsArgs> = {
 };
 
 // 프로젝트 분석 도구
-const analyzeProject: Tool<AnalyzeProjectArgs> = {
+export const analyzeProject: Tool<AnalyzeProjectArgs> = {
   name: "analyze_project",
   description: "프로젝트의 코드를 분석하고 임베딩을 생성합니다",
   inputSchema: {
@@ -262,4 +258,4 @@ const createChunks: Tool<CreateChunksArgs> = {
   },
 };
 
-export const projectTools = [createChunks];
+export const projectTools = [];
