@@ -86,6 +86,26 @@ graph TD
    - 명령어를 객체로 캡슐화
    - 실행 및 검증 로직 분리
 
+## 주요 기술적 결정
+
+1. **환경변수 기반 구성**
+
+   - 프로젝트 ID를 환경변수 `PROJECT_ID`로 전달
+   - 명령줄 인자 대신 환경변수 사용으로 일관성 확보
+   - CLI와 MCP 서버 모드 간 통일된 접근 방식
+
+2. **프로젝트 관리 분리**
+
+   - 프로젝트 관리 기능을 MCP 도구에서 제거
+   - `projectService`를 통한 중앙화된 프로젝트 관리
+   - CLI를 통해서만 프로젝트 관리 기능 노출
+   - Git 저장소 필수 요구사항 적용
+
+3. **데이터 삭제 전략**
+   - 프로젝트 삭제 시 관련 코드 청크 캐스케이드 삭제
+   - 무분별한 삭제 방지를 위한 확인 절차 구현
+   - 트랜잭션 기반 실행으로 데이터 일관성 보장
+
 ## 데이터 흐름
 
 프로젝트 관리 및 코드 분석의 주요 데이터 흐름:
@@ -112,6 +132,7 @@ sequenceDiagram
 
     User->>CLI: 프로젝트 분석 명령
     CLI->>ProjectService: 프로젝트 분석 요청
+    CLI->>CLI: 환경변수 PROJECT_ID 설정
     ProjectService->>GitService: 변경 파일 확인
     GitService-->>ProjectService: 변경된 파일 목록
     ProjectService->>CodeService: 코드 분석 요청
@@ -124,6 +145,21 @@ sequenceDiagram
     Repository->>DB: 해시 업데이트
     ProjectService-->>CLI: 완료 메시지
     CLI-->>User: 분석 결과
+
+    User->>CLI: 프로젝트 삭제 명령
+    CLI->>ProjectService: 프로젝트 삭제 요청
+    ProjectService->>Repository: 프로젝트 존재 확인
+    Repository-->>ProjectService: 프로젝트 정보
+    alt 강제 삭제 플래그 없음
+        ProjectService-->>CLI: 삭제 확인 요청
+        CLI-->>User: 삭제 확인 질문
+        User->>CLI: 삭제 확인
+    end
+    ProjectService->>Repository: 프로젝트 및 코드 청크 삭제
+    Repository->>DB: 데이터 삭제
+    Repository-->>ProjectService: 삭제 결과
+    ProjectService-->>CLI: 완료 메시지
+    CLI-->>User: 삭제 결과
 ```
 
 ## 오류 처리 전략
@@ -179,8 +215,12 @@ src/
 interface ProjectService {
   createProject(params: CreateProjectParams): Promise<Project>;
   listProjects(): Promise<Project[]>;
-  analyzeProject(projectId: string): Promise<AnalysisResult>;
+  analyzeProject(
+    projectId: string,
+    forceRefresh?: boolean
+  ): Promise<AnalysisResult>;
   updateProjectCommitHash(projectId: string, hash: string): Promise<void>;
+  deleteProject(projectId: string): Promise<boolean>;
 }
 
 // GitService
@@ -202,6 +242,8 @@ interface CodeChunkRepository {
   saveCodeChunk(chunk: CodeChunk): Promise<void>;
   searchCodeChunks(query: string, projectId: string): Promise<CodeChunk[]>;
   updateProjectCommitHash(projectId: string, hash: string): Promise<void>;
+  deleteProject(projectId: string): Promise<boolean>;
+  getProjectChunkCount(projectId: string): Promise<number>;
 }
 ```
 
@@ -211,13 +253,21 @@ interface CodeChunkRepository {
 interface Command {
   name: string;
   description: string;
-  options: CommandOption[];
-  execute(args: any): Promise<void>;
+  execute(args: string[]): Promise<void>;
 }
 
-interface CommandParser {
-  parseArgs(args: string[]): ParsedArgs;
-  validateArgs(command: Command, args: ParsedArgs): ValidationResult;
-  executeCommand(command: Command, args: ParsedArgs): Promise<void>;
+interface ParseOptions {
+  requiredArgs?: string[];
+  optionalArgs?: string[];
+  flags?: string[];
+  namedArgs?: string[];
+  descriptions?: Record<string, string>;
+  examples?: string[];
+}
+
+interface ParsedArgs {
+  positional: string[];
+  named: Record<string, string>;
+  flags: Record<string, boolean>;
 }
 ```
