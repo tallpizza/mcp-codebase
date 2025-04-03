@@ -1,304 +1,263 @@
 # 기술 컨텍스트
 
-## 사용 기술
+## 사용된 기술
 
-### 백엔드
+### 백엔드 런타임
 
-1. **런타임 및 언어**:
+- **Node.js**: 16.x 이상
+- **Bun**: 1.x - 빠른 실행 및 번들링
 
-   - Bun 런타임
-   - TypeScript
+### 데이터베이스
 
-2. **데이터베이스**:
+- **PostgreSQL**: 15.x
+- **pgvector**: 벡터 검색 확장
 
-   - PostgreSQL
-   - pgvector 확장 (벡터 유사도 검색)
-   - Drizzle ORM
+### 프로토콜 및 통신
 
-3. **프로토콜**:
+- **MCP(Model Context Protocol)**: Claude와의 통신
+- **stdio**: 기본 전송 계층
 
-   - Model Context Protocol (MCP)
-   - Node.js `stdio`를 통한 전송 계층
+### 임베딩
 
-4. **임베딩**:
+- **OpenAI Embeddings API**: Ada 002 모델
+- **pgvector**: 벡터 저장 및 코사인 유사도 검색
 
-   - OpenAI API (코드 임베딩 생성)
-   - 코사인 유사도 기반 검색
+### 코드 분석
 
-5. **코드 분석**:
+- **자체 구현 파서**: 파일 시스템 접근 및 코드 분석
+- **AST 파싱**: 필요한 경우 코드 구조 분석
+- **청킹 알고리즘**: 코드 청크 분할 및 처리
 
-   - 정규 표현식 기반 파싱
-   - 구문 트리 분석
-   - 의존성 추출
+### 버전 관리
 
-6. **버전 관리**:
-
-   - Git 통합
-   - 커밋 해시 추적
-   - 변경 파일 감지
-
-7. **CLI 인터페이스**:
-   - 커맨드 라인 인자 파싱
-   - 명령어 기반 아키텍처
-   - 도움말 및 사용법 생성
-
-## 기술 스택 상세
-
-### Bun + TypeScript
-
-```mermaid
-graph LR
-    Bun[Bun 런타임] --> TS[TypeScript 코드]
-    TS --> Build[빌드 프로세스]
-    Build --> JS[JavaScript 실행]
-```
-
-- **버전**: Bun 1.x
-- **주요 기능**:
-  - 빠른 실행 시간
-  - 내장 번들러
-  - TypeScript 지원
-  - 패키지 관리
-
-### PostgreSQL + pgvector
-
-```mermaid
-graph TD
-    PG[PostgreSQL] --> PGV[pgvector 확장]
-    PGV --> VS[벡터 저장]
-    PGV --> CS[코사인 유사도 검색]
-
-    DR[Drizzle ORM] --> PG
-    DR --> Schema[스키마 정의]
-    DR --> Query[쿼리 빌더]
-```
-
-- **버전**: PostgreSQL 15+
-- **pgvector**: 고차원 벡터 저장 및 유사도 검색
-- **Drizzle ORM**: 타입 안전한 데이터베이스 액세스
-- **스키마 확장**: Git 커밋 해시 저장 필드 추가
-
-### MCP (Model Context Protocol)
-
-```mermaid
-graph LR
-    Client[MCP 클라이언트] <--> Server[MCP 서버]
-    Server --> Tools[도구 레이어]
-
-    Client --> Request[도구 요청]
-    Server --> Response[결과 응답]
-```
-
-- **주요 개념**:
-  - 도구 정의 및 실행
-  - 요청/응답 처리
-  - 표준화된 통신
+- **Git**: 소스 제어 및 변경 추적
+- **커밋 해시 추적**: 변경된 파일 감지
 
 ### CLI 인터페이스
 
-```mermaid
-graph TD
-    Args[명령줄 인자] --> Parser[인자 파서]
-    Parser --> Validator[인자 검증]
-    Validator --> Commands[명령어 실행기]
-    Commands --> Service[서비스 호출]
-    Commands --> Output[결과 출력]
-```
+- **명령어 파서**: 인자 처리 및 검증
+- **커맨드 패턴**: 클린한 명령어 구현
+- **도움말 생성**: 자동 사용법 문서 생성
 
-- **주요 기능**:
-  - 명령어 기반 구조
-  - 인자 파싱 및 검증
-  - 도움말 생성
-  - 오류 처리
+### ORM
 
-### OpenAI 임베딩
+- **Drizzle ORM**: 타입 안전 쿼리 생성
+- **마이그레이션**: 스키마 변경 관리
 
-```mermaid
-graph TD
-    Code[코드 청크] --> OpenAI[OpenAI API]
-    OpenAI --> Embedding[벡터 임베딩]
-    Embedding --> Store[데이터베이스 저장]
-    Embedding --> Search[의미적 검색]
-```
+## 개발 설정
 
-- **모델**: text-embedding-3-large
-- **차원**: 1536
-- **용도**: 코드 의미 분석 및 유사도 검색
+### 패키지 관리자
+
+- **npm/yarn**: 패키지 의존성 관리
+- **Bun**: 패키지 설치 및 스크립트 실행
+
+### 타입스크립트 설정
+
+- **strict 모드**: 정적 타입 검사 강화
+- **ESNext 타겟**: 최신 JS 기능 활용
+
+### 테스트
+
+- **Jest/Vitest**: 단위 테스트
+- **테스트 자동화**: CI/CD 통합 계획
+
+## 기술적 제약
+
+### 임베딩 API
+
+- OpenAI API 키 필요
+- 요청 속도 제한
+
+### 데이터베이스
+
+- PostgreSQL 15+ 필요
+- pgvector 확장 설치 필요
+- 벡터 인덱스 성능 최적화 필요
 
 ### Git 통합
 
-```mermaid
-graph TD
-    Git[Git 저장소] --> Hash[커밋 해시 추출]
-    Hash --> Compare[해시 비교]
-    Compare --> Changed[변경된 파일 감지]
-    Changed --> Selective[선택적 재분석]
+- Git CLI 의존성
+- Git 저장소 접근 권한
+
+## 기술 의존성
+
 ```
-
-- **주요 기능**:
-  - 로컬 Git 저장소 통합
-  - 변경 파일 추적 기능
-  - 프로젝트별 최신 커밋 저장
-  - 변경된 파일 필터링
-
-## 개발 환경
-
-### 개발 도구
-
-- **IDE**: VS Code
-- **패키지 관리자**: Bun
-- **버전 관리**: Git
-- **CI/CD**: 미구현 상태
-
-### 환경 설정
-
-1. **환경 변수**:
-
-   - `DATABASE_URL`: PostgreSQL 연결 문자열
-   - `OPENAI_API_KEY`: OpenAI API 키
-   - `PROJECT_ID`: 현재 작업 중인 프로젝트 ID
-
-2. **필수 설치**:
-   - Bun 런타임
-   - PostgreSQL 15+ (pgvector 확장 포함)
-   - Git
+dependencies:
+  - "drizzle-orm": PostgreSQL ORM
+  - "openai": OpenAI API 클라이언트
+  - "pg": PostgreSQL 클라이언트
+  - "nanoid": ID 생성
+  - "glob": 파일 패턴 매칭
+  - "dotenv": 환경 변수 로딩
+  - "commander": CLI 명령어 파싱
+```
 
 ## 데이터 흐름
 
-### CLI 명령어 실행 프로세스
+### 프로젝트 생성 흐름
 
 ```mermaid
 sequenceDiagram
     참가자 User as 사용자
     참가자 CLI as CLI 인터페이스
-    참가자 Parser as 인자 파서
-    참가자 Command as 명령어
-    참가자 Service as 서비스
-    참가자 Repository as 저장소
+    참가자 PS as 프로젝트 서비스
+    참가자 Git as Git 서비스
+    참가자 Repo as 코드 청크 리포지토리
     참가자 DB as 데이터베이스
 
-    User->>CLI: 명령어 실행
-    CLI->>Parser: 인자 전달
-    Parser->>Parser: 인자 파싱 및 검증
+    User->>CLI: create-project 명령
+    CLI->>PS: createProject 호출
+    PS->>Git: isGitRepository 호출
+    Git-->>PS: Git 저장소 확인 결과
 
-    alt 검증 실패
-        Parser-->>CLI: 오류 반환
-        CLI-->>User: 오류 메시지 및 사용법 표시
-    else 검증 성공
-        Parser->>Command: 명령어 및 검증된 인자 전달
-        Command->>Service: 서비스 호출
-        Service->>Repository: 저장소 작업
-        Repository->>DB: 데이터베이스 쿼리
-        DB-->>Repository: 결과 반환
-        Repository-->>Service: 데이터 변환
-        Service-->>Command: 결과 전달
-        Command-->>CLI: 처리 결과 반환
-        CLI-->>User: 결과 출력
+    alt Git 저장소 아님
+        PS-->>CLI: 오류: Git 저장소가 아님
+        CLI-->>User: 오류 메시지 표시
+    else Git 저장소임
+        PS->>Git: getCurrentCommitHash 호출
+        Git-->>PS: 현재 커밋 해시
+        PS->>Repo: createProject 호출
+        Repo->>DB: 프로젝트 데이터 저장
+        DB-->>Repo: 저장 결과
+        Repo-->>PS: 생성된 프로젝트
+        PS-->>CLI: 성공 결과
+        CLI-->>User: 프로젝트 ID 표시
     end
 ```
 
-### 코드 청킹 프로세스
+### 검색 흐름
 
 ```mermaid
 sequenceDiagram
-    참가자 Tool as 분석 도구
-    참가자 FS as 파일 시스템
-    참가자 Chunking as 청킹 서비스
+    참가자 Client as MCP 클라이언트
+    참가자 Server as MCP 서버
+    참가자 Tool as 코드 도구
+    참가자 Service as 코드 서비스
+    참가자 Repo as 코드 청크 리포지토리
     참가자 Git as Git 서비스
-    참가자 Embedding as 임베딩 서비스
     참가자 DB as 데이터베이스
 
-    Tool->>Git: 커밋 해시 확인
-    Git-->>Tool: 마지막 분석 이후 변경 여부
+    Client->>Server: 코드 검색 요청
+    Server->>Tool: 도구 호출
+    Tool->>Service: 검색 서비스 호출
+    Service->>Git: 커밋 변경 확인
+    Git-->>Service: 변경된 파일 목록
 
     alt 변경된 파일 있음
-        Git->>Git: 변경된 파일 목록 추출
-        Git-->>Tool: 변경된 파일 목록
-        Tool->>Chunking: 변경된 파일만 처리
-    else 변경 없음 또는 첫 분석
-        Tool->>FS: 전체 파일 접근
-        FS-->>Tool: 모든 파일 내용
-        Tool->>Chunking: 전체 파일 처리
+        Service->>Service: 변경된 파일 재분석
+        Service->>Repo: 새 코드 청크 저장
+        Repo->>DB: 청크 저장
+        Repo-->>Service: 저장 완료
+        Service->>Git: 마지막 분석 커밋 업데이트
+        Git->>Repo: 커밋 해시 저장
+        Repo->>DB: 해시 업데이트
+        DB-->>Repo: 업데이트 완료
+        Repo-->>Git: 저장 완료
     end
 
-    Chunking->>Chunking: 코드 파싱 및 분석
-    Chunking-->>Tool: 추출된 청크
-
-    Tool->>Embedding: 벡터 생성 요청
-    Embedding-->>Tool: 임베딩 벡터
-
-    Tool->>DB: 청크 및 벡터 저장
-    DB-->>Tool: 저장 결과
-
-    Tool->>Git: 현재 커밋 해시 저장
-    Git-->>Tool: 저장 완료
+    Service->>Repo: 코드 청크 검색
+    Repo->>DB: 벡터 검색 쿼리
+    DB-->>Repo: 검색 결과
+    Repo-->>Service: 검색 결과 변환
+    Service-->>Tool: 포맷된 결과
+    Tool-->>Server: 결과 반환
+    Server-->>Client: 검색 결과
 ```
 
-### 검색 프로세스
+## 시스템 요구사항
 
-```mermaid
-sequenceDiagram
-    참가자 Client as 클라이언트
-    참가자 Tool as 검색 도구
-    참가자 Git as Git 서비스
-    참가자 Embedding as 임베딩 서비스
-    참가자 DB as 데이터베이스
+### 하드웨어
 
-    Client->>Tool: 검색 쿼리
-    Tool->>Git: 커밋 해시 확인
+- 최소 4GB RAM
+- 2 CPU 코어
+- 코드베이스 크기에 따른 충분한 디스크 공간
 
-    alt 변경된 파일 있음
-        Git-->>Tool: 변경 감지됨
-        Tool->>Tool: 변경 파일 재분석
-    else 변경 없음
-        Git-->>Tool: 변경 없음
-    end
+### 소프트웨어
 
-    Tool->>Embedding: 쿼리 임베딩 생성
-    Embedding-->>Tool: 쿼리 벡터
+- Node.js 16.x 이상 또는 Bun 1.x
+- PostgreSQL 15.x + pgvector
+- Git CLI
 
-    Tool->>DB: 코사인 유사도 검색
-    DB-->>Tool: 유사 청크
+## 배포 아키텍처
 
-    Tool->>Client: 검색 결과
+### 로컬 개발
+
+```
+[개발자 환경] -> [MCP 코드베이스] -> [로컬 PostgreSQL]
 ```
 
-## 기술적 제약 사항
+### 자체 호스팅
 
-1. **벡터 검색 제한**:
+```
+[서버] -> [MCP 코드베이스] -> [PostgreSQL 서버] -> [OpenAI API]
+```
 
-   - pgvector 성능 제약
-   - 대규모 벡터 컬렉션 처리 한계
-   - 일부 복잡한 유사도 쿼리 제한
+## API 및 서비스 인터페이스
 
-2. **코드 분석 제한**:
+### 프로젝트 서비스
 
-   - 정규식 기반 파싱의 한계
-   - 일부 복잡한 코드 패턴 분석 어려움
-   - 다양한 프로그래밍 언어 지원 제한
+```typescript
+interface ProjectService {
+  createProject(params: CreateProjectParams): Promise<Project>;
+  listProjects(): Promise<Project[]>;
+  getProjectById(id: string): Promise<Project | null>;
+  analyzeProject(projectId: string, refresh?: boolean): Promise<AnalysisResult>;
+  updateProjectCommitHash(projectId: string, hash: string): Promise<void>;
+}
+```
 
-3. **확장성 제약**:
+### Git 서비스
 
-   - 단일 서버 아키텍처
-   - 병렬 처리 제한
-   - 메모리 사용량 최적화 필요
+```typescript
+interface GitService {
+  isGitRepository(path: string): Promise<boolean>;
+  getCurrentCommitHash(path: string): Promise<string>;
+  getChangedFiles(path: string, since: string): Promise<string[]>;
+  updateLastAnalyzedCommit(projectId: string, hash: string): Promise<void>;
+}
+```
 
-4. **Git 통합 제약**:
-   - 로컬 Git 저장소만 지원
-   - 복잡한 Git 워크플로우 미지원
-   - 대규모 저장소 처리 성능 한계
+### 코드 청크 리포지토리
 
-## 의존성
+```typescript
+interface CodeChunkRepository {
+  createProject(project: Project): Promise<Project>;
+  getProjectById(id: string): Promise<Project | null>;
+  getAllProjects(): Promise<Project[]>;
+  saveCodeChunk(chunk: CodeChunk): Promise<void>;
+  searchCodeChunks(query: string, projectId: string): Promise<CodeChunk[]>;
+  updateProjectCommitHash(projectId: string, hash: string): Promise<void>;
+}
+```
 
-1. **직접 의존성**:
+## 기술적 결정 사항
 
-   - `@modelcontextprotocol/sdk`: MCP 프로토콜 구현
-   - `drizzle-orm`: 데이터베이스 ORM
-   - `pg`: PostgreSQL 클라이언트
-   - `openai`: OpenAI API 클라이언트
-   - `child_process`: Git 명령어 실행
+### Drizzle ORM 선택
 
-2. **개발 의존성**:
-   - `typescript`: 타입 시스템
-   - `bun-types`: Bun 타입 정의
-   - `drizzle-kit`: 마이그레이션 도구
+- 타입 안전성 강화
+- 성능 최적화
+- 스키마 마이그레이션 지원
+
+### OpenAI Embeddings
+
+- 고품질 코드 임베딩
+- 다양한 언어 지원
+- 선제적 문맥 이해
+
+### PostgreSQL + pgvector
+
+- 벡터 검색 최적화
+- 트랜잭션 지원
+- ACID 속성
+
+### Bun 런타임
+
+- 빠른 시작 및 실행
+- TypeScript 기본 지원
+- npm 패키지 호환성
+
+### Git 통합
+
+- 로컬 Git 저장소 지원
+- 커밋 해시 기반 변경 감지
+- 선택적 파일 재분석

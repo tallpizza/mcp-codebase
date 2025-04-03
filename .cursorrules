@@ -22,6 +22,12 @@
    - 도움말 및 사용법 자동 생성
    - 명령어별 옵션 정의
 
+5. **프로젝트 관리 서비스**
+   - 프로젝트 관리 기능을 MCP 도구에서 서비스로 이전
+   - CLI를 통해서만 프로젝트 관리 기능 노출
+   - 모든 프로젝트는 Git 저장소여야 함
+   - 프로젝트 생성 시 절대 경로 지원
+
 ## 기술 선호도
 
 1. **코드 스타일**
@@ -35,6 +41,7 @@
    - 리포지토리 패턴: 데이터 액세스용
    - 도구 인터페이스: MCP 도구 구현
    - 커맨드 패턴: CLI 명령어 구현
+   - 서비스 패턴: 비즈니스 로직 캡슐화
    - 오류 처리: 상세 오류 메시지 및 적절한 스택 트레이스
 
 3. **파일 구조**
@@ -44,6 +51,7 @@
    - `src/cli/`: CLI 명령어 파서 및 실행기
    - `src/db/`: 데이터베이스 관련
    - `src/types/`: 타입 정의
+   - `src/repositories/`: 데이터 액세스 로직
 
 ## 알려진 과제
 
@@ -62,19 +70,30 @@
    - 벡터 검색 성능 개선 필요
    - 캐싱 전략 구현 필요
 
+4. **아키텍처 개선**
+   - MCP 도구와 서비스 계층 간 명확한 분리 필요
+   - 도구 계층의 간소화 및 표준화 필요
+   - 프로젝트 서비스와 리포지토리 관계 정립 필요
+
 ## 중요 구현 경로
 
-1. **추가 CLI 명령어 구현**
+1. **프로젝트 서비스 구현**
+   - 프로젝트 서비스 생성 (`src/services/projectService.ts`)
+   - MCP 도구에서 프로젝트 관리 기능 이전
+   - Git 저장소 검증 로직 추가
+   - CLI 명령어와 연동
+
+2. **CLI 명령어 확장**
    - 프로젝트 삭제 명령어 구현 (`src/cli/index.ts`)
    - 프로젝트 상태 확인 명령어 구현 (`src/cli/index.ts`)
    - 고급 검색 명령어 구현 (`src/cli/index.ts`)
 
-2. **Git 통합 확장**
+3. **Git 통합 확장**
    - 원격 Git 저장소 지원 구현 (`src/services/gitService.ts`)
    - 브랜치별 분석 기능 추가 (`src/services/gitService.ts`)
    - 변경 내용 요약 기능 구현 (`src/services/gitService.ts`)
 
-3. **성능 개선**
+4. **성능 개선**
    - 임베딩 생성 병렬화 구현 (`src/services/embeddingService.ts`)
    - 캐싱 시스템 도입 (`src/services/cacheService.ts`)
-   - 벡터 검색 최적화 (`src/services/codeChunkRepository.ts`) 
+   - 벡터 검색 최적화 (`src/repositories/codeChunkRepository.ts`) 
