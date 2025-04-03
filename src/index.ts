@@ -59,7 +59,7 @@ async function main() {
   const args = process.argv.slice(2);
 
   // 도움말 출력
-  if (args.length === 0 || args[0] === "--help") {
+  if (args[0] === "--help") {
     showHelp();
     process.exit(0);
   }
@@ -67,6 +67,7 @@ async function main() {
   // CLI 명령어 모드 확인
   const potentialCommand = args[0];
   if (
+    potentialCommand &&
     !potentialCommand.startsWith("--") &&
     commands.some((cmd) => cmd.name === potentialCommand)
   ) {
